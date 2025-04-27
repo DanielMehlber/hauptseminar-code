@@ -2,10 +2,9 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import time
-from models.missile import Interceptor, Target
 from gym.visualisation import MissileVisualizer
 import time
-from agents.agent import Agent
+from models.missile import MissileModel
 
 
 class MissileEnvSettings:
@@ -17,7 +16,7 @@ class MissileEnvSettings:
 
 class MissileEnv(gym.Env):
 
-    def __init__(self, target: Agent, interceptor: Agent, settings=MissileEnvSettings()):
+    def __init__(self, target: MissileModel, interceptor: MissileModel, settings=MissileEnvSettings()):
         super().__init__()
         self.settings = settings
         self.last_step_time = None
@@ -27,7 +26,7 @@ class MissileEnv(gym.Env):
         self.interceptor = interceptor
 
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(12,), dtype=np.float32)
-        self.action_space = spaces.Box(low=-10, high=10, shape=(3,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-10, high=10, shape=(2,), dtype=np.float32)
 
         self.visualizer = MissileVisualizer()
 
@@ -61,14 +60,17 @@ class MissileEnv(gym.Env):
         self.sim_time += dt
 
         # Update entities with scaled delta time
-        self.target.step(np.zeros(3), dt=dt, t=self.sim_time)
-        self.interceptor.step(action, dt=dt, t=self.sim_time)
+        self.target.accelerate(np.zeros(2), dt=dt, t=self.sim_time)
+        self.interceptor.accelerate(np.array([5.0, 0.0]), dt=dt, t=self.sim_time)
 
         self.trajectory.append((self.interceptor.pos.copy(), self.target.pos.copy()))
 
         obs = self._get_obs()
         done = self._check_done()
         reward = self._get_reward(done)
+
+        distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
+        print(f"Reward: {reward} (Distance: {distance}), Done: {done}, Time: {self.sim_time:.2f}s")
 
         self.render()
 
@@ -85,12 +87,14 @@ class MissileEnv(gym.Env):
         ])
 
     def _get_reward(self, done):
-        if done:
-            dist = np.linalg.norm(self.interceptor.pos - self.target.pos)
-            return 1000 if dist < 20 else -1000
-        return -1
+        dist = np.linalg.norm(self.interceptor.pos - self.target.pos)
+
+        if self.interceptor.pos[2] < 0:
+            return -1000
+
+        return 1000 if dist < 50 else -(dist ** 2) / 1000
 
     def _check_done(self):
         distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
-        return distance < 20 or self.interceptor.steps > 500
+        return distance < 20 or self.sim_time > 50
 

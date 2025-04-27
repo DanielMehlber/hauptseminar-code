@@ -1,8 +1,8 @@
 import numpy as np
-from .physics import euler_to_rotation_matrix, get_acceleration_of
+from models.physics import euler_to_rotation_matrix
 
 class MissileModel:
-    def __init__(self, speed=100, max_acc=50 * 9.81, pos=np.zeros(3)):
+    def __init__(self, velocity=np.ndarray([0, 0, 100]), max_acc=50 * 9.81, pos=np.zeros(3)):
         """
         Initializes the missile's rigit body motion model in 3D space.
 
@@ -12,51 +12,57 @@ class MissileModel:
             pos (np.ndarray): The initial position of the missile in 3D space.
         """
         self.init_pos = pos.copy()
-        self.init_vector = np.array([0, 0, speed])
-        self.speed = speed
+        self.init_velocity = velocity.copy()
+        self.speed = np.linalg.norm(velocity)
+
+        self.velocity = velocity.copy()
         self.max_acc_magnitude = max_acc
 
         self.reset()
 
-    def execute_command(self, rotation_commend, dt=0.1, t=0.0):
-        """
-        Executes a guidance command in the physical model by applying a rotation command 
-        to the entity's velocity vector, calculating the resulting acceleration, and updating 
-        the entity's position and velocity accordingly.
+    def __clamp_lateral_acc(self, lat_acc):
+        command_acc = lat_acc
+        acc_magnitude = np.linalg.norm(lat_acc)
+        if (acc_magnitude > self.max_acc_magnitude):
+            command_acc = lat_acc * (self.max_acc_magnitude / acc_magnitude)
+            print (f"MissileModel - Acceleration clamped: {command_acc} ({acc_magnitude / 9.81:.2f}g)")
 
-        If the rotation command exceeeds the maximum acceleration, it is clamped.
+        return command_acc
+    
+    def __lateral_to_world_acc(self, lat_acc: np.ndarray):
+        world_acc = np.array([lat_acc[0], lat_acc[1], 0])
+        rotation_matrix = euler_to_rotation_matrix(self.velocity / np.linalg.norm(self.velocity))
+        world_acc = rotation_matrix @ world_acc
 
-        Args:
-            rotation_commend (np.ndarray): A 3D vector representing the rotation command 
-                to be applied to the entity's velocity.
-            dt (float, optional): The time step for the simulation. Defaults to 0.1.
-            t (float, optional): The current simulation time. Defaults to 0.0.
-        """
-        # create velocity vector after applying action (rotation)
-        action_rotation_mat = euler_to_rotation_matrix(rotation_commend)
-        new_velocity_vec = action_rotation_mat @ self.velocity
+        print (f"MissileModel - World acceleration: {world_acc} ({np.linalg.norm(world_acc) / 9.81:.2f}g)")
 
-        # calculate necessary acceleration to achieve the action velocity from the current velocity
-        self.last_acc_vec = get_acceleration_of(self.velocity, new_velocity_vec, dt)
-
-        # clamp acceleration to max acceleration (to avoid unrealistic maneuvers)
-        acceleration_magnitude = np.linalg.norm(self.last_acc_vec)
-        if acceleration_magnitude > self.max_acc_magnitude:
-            self.last_acc_vec = self.last_acc_vec / acceleration_magnitude * self.max_acc_magnitude
-            print ("Clamping acceleration to max acceleration")
-
-        # calculate new velocity vector
-        self.velocity = self.velocity + self.last_acc_vec * dt
-        self.velocity *= self.speed / np.linalg.norm(self.velocity)  # normalize to speed
-
+        return world_acc
+    
+    def __apply_acceleration(self, world_acc: np.ndarray, dt: float):
+        self.velocity += world_acc * dt
+        self.velocity *= self.speed / np.linalg.norm(self.velocity)  # normalize to constant speed
         self.pos += self.velocity * dt
 
-        print (f"Entity position: {self.pos}, velocity: {np.linalg.norm(self.velocity)}, theoretical acceleration: {acceleration_magnitude}")
+    def accelerate(self, lat_acc: np.ndarray, dt=0.1, t=0.0):
+        """
+        Tries to execute a guidance acceleration command. If the physical model
+        cannot fully execute this command it is clamped to an executable one, respecting
+        accelration and turn limits.
 
-        self.steps += 1
+        Args:
+            acc (np.ndarray): 2D lateral acceleration vector in the plane of the missile's velocity vector in m/s^2.
+            dt (float): the delta time in which the command should be executed in seconds
+            t (float): the total time of the simulation in seconds
+        """
+        print (f"MissileModel - Acceleration command: {lat_acc}")
+        command_acc = self.__clamp_lateral_acc(lat_acc) # prevent exceeding max acceleration
+
+        world_acc = self.__lateral_to_world_acc(command_acc) # from 2D lateral to 3D world coordinates
+        self.__apply_acceleration(world_acc, dt)
+        
 
     def reset(self):
         self.pos = self.init_pos.copy()
-        self.velocity = np.array([0, 0, self.speed])
+        self.velocity = self.init_velocity.copy()
         self.last_acc_vec = None
-        self.steps = 0
+        self.steps = 0  

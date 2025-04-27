@@ -10,7 +10,7 @@ class ProportionalNavAgent(MissileModel, Agent):
 
     def step(self, dt: float, t: float):
         command = np.zeros(3)
-        MissileModel.execute_command(self, command, dt=dt, t=t)
+        MissileModel.execute_rotation_command(self, command, dt=dt, t=t)
 
     def reset(self):
         MissileModel.reset(self)

@@ -1,17 +1,17 @@
 from gym.environment import MissileEnv, MissileEnvSettings
 import numpy as np
-import math
+from models.missile import MissileModel
+from stable_baselines3 import SAC
 
 settings = MissileEnvSettings()
 settings.time_speed = 1.0
 
-env = MissileEnv(settings=settings)
-obs, _ = env.reset()
+target = MissileModel(velocity=np.array([0.0, 50.0, 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -10000.0, 5000.0]))
+interceptor = MissileModel(velocity=np.array([0.0, 0.0, 100.0]), max_acc=50 * 9.81, pos=np.array([0.0, 0.0, 0.0]))
 
-while True:
-    action = np.random.uniform(math.pi / 2, -math.pi / 2, size=3)
-    obs, reward, done, _, _ = env.step(action)
-    if done:
-        break
+env = MissileEnv(settings=settings, interceptor=interceptor, target=target)
+
+model = SAC("MlpPolicy", env, verbose=1, tensorboard_log="./sac_missile_tensorboard/")
+model.learn(total_timesteps=10000)
 
 print("Simulation finished.")

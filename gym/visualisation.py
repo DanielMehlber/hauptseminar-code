@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 import threading
 import time
@@ -58,6 +57,18 @@ class MissileVisualizer(threading.Thread):
 
             if sim_time is not None:
                 self.ax.set_title(f"Simulation Time: {sim_time:.2f}s")
+
+            # Dynamically adjust axis limits based on combined paths
+            all_points = np.vstack((ip, tp)) if len(ip) > 0 and len(tp) > 0 else (ip if len(ip) > 0 else tp)
+            if len(all_points) > 0:
+                margin = 50  # Add some margin so the lines aren't touching the plot edges
+                min_vals = np.min(all_points, axis=0) - margin
+                max_vals = np.max(all_points, axis=0) + margin
+
+                self.ax.set_xlim(min_vals[0], max_vals[0])
+                self.ax.set_ylim(min_vals[1], max_vals[1])
+                self.ax.set_zlim(min_vals[2], max_vals[2])
+                
 
             self.fig.canvas.draw_idle()
             self.fig.canvas.flush_events()

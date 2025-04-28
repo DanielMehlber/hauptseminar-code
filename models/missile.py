@@ -1,5 +1,5 @@
 import numpy as np
-from models.physics import euler_to_rotation_matrix
+import models.physics as physics
 
 class MissileModel:
     def __init__(self, velocity=np.ndarray([0, 0, 100]), max_acc=50 * 9.81, pos=np.zeros(3)):
@@ -22,14 +22,14 @@ class MissileModel:
 
     def __clamp_lateral_acc(self, lat_acc):
         command_acc = lat_acc
-        clamped = False
+        penalty = 0.0
         acc_magnitude = np.linalg.norm(lat_acc)
         if (acc_magnitude > self.max_acc_magnitude):
             command_acc = lat_acc * (self.max_acc_magnitude / acc_magnitude)
             print (f"MissileModel - Acceleration clamped: {command_acc} ({acc_magnitude / 9.81:.2f}g)")
-            clamped = True
+            penalty = np.linalg.norm(command_acc - lat_acc) / self.max_acc_magnitude
 
-        return command_acc, clamped
+        return command_acc, penalty
     
     def get_orientation_matrix(self):
         # basically the gram schmidt process to build an orthonormal basis
@@ -96,11 +96,11 @@ class MissileModel:
         Returns:
             bool: True if the command was executed successfully, False otherwise.
         """
-        command_acc, oversteered = self.__clamp_lateral_acc(lat_acc) # prevent exceeding max acceleration (ingnored for now)
+        command_acc, penalty = self.__clamp_lateral_acc(lat_acc) # prevent exceeding max acceleration (ingnored for now)
         world_acc = self.__lateral_to_world_acc(command_acc) # from 2D lateral to 3D world coordinates
         self.__apply_acceleration(world_acc, dt)
         
-        return not oversteered
+        return penalty
 
     def reset(self):
         self.pos = self.init_pos.copy()

@@ -8,10 +8,10 @@ from models.missile import MissileModel
 
 
 class MissileEnvSettings:
-    def __init__(self, realtime=False, time_speed=1.0, min_dt=0.1):
-        self.realtime = realtime        # If True, slows simulation to real-time
-        self.time_speed = time_speed    # Speed multiplier for simulation (e.g., 1.0 = real-time)
-        self.min_dt = min_dt                # Minimum delta time for simulation steps
+    def __init__(self, realtime=False, time_step=1.0, min_dt=0.1):
+        self.time_step = time_step    # Speed multiplier for simulation (e.g., 1.0 = real-time)
+        self.min_dt = min_dt          # Minimum delta time for simulation steps
+        self.realtime = realtime      # If True, the simulation will run in real-time
 
 
 class MissileEnv(gym.Env):
@@ -82,38 +82,41 @@ class MissileEnv(gym.Env):
         return self._get_obs(self.settings.min_dt), {}
 
     def step(self, action):
-        step_time = time.time()
-        real_dt = step_time - self.last_step_time
+        dt = 0.0
+        if not self.settings.realtime:
+            step_time = time.time()
+            real_dt = step_time - self.last_step_time
 
-        # if dt gets to small, equations explode
-        wait_time = self.settings.min_dt - real_dt
-        if wait_time > 0:
-            time.sleep(wait_time)
+            # if dt gets to small, equations explode
+            wait_time = self.settings.min_dt - real_dt
+            if wait_time > 0:
+                time.sleep(wait_time)
 
-        real_dt = time.time() - self.last_step_time
-        self.last_step_time = step_time
+            real_dt = time.time() - self.last_step_time
 
-        # Apply simulation time scaling
-        dt = real_dt * self.settings.time_speed
-        self.sim_time += dt
+            self.last_step_time = step_time
+
+            # Apply simulation time scaling
+            dt = real_dt
+            self.sim_time += dt
+        else:
+            # We use a fixed time step
+            dt = self.settings.time_step
+            self.sim_time += dt
 
         # Update entities with scaled delta time
         self.target.accelerate(np.zeros(2), dt=dt, t=self.sim_time)
-        oversteered = self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
+        oversteering_magnitude = self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
 
         self.trajectory.append((self.interceptor.pos.copy(), self.target.pos.copy()))
 
         obs = self._get_obs(dt)
         status = self._check_status()
         done = self._check_done(status)
-        reward = self._get_reward(action, oversteered, status, dt)
+        reward = self._get_reward(action, oversteering_magnitude, status, dt)
         
         # Update after reward calculation because it needs the last sensor data
         self._update_sensor_data()
-
-        distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
-        print(f"Reward: {reward} (Distance: {distance}), Done: {done}, Time: {self.sim_time:.2f}s")
-
         self.render()
         
         return obs, reward, done, False, {}
@@ -132,41 +135,53 @@ class MissileEnv(gym.Env):
         los_angle_rate = (los_angle - self.last_los_angle) / dt
 
         return np.concatenate([
-            distance, closing_rate, los_angle, los_angle_rate, # sensor data
+            np.array([distance]), np.array([closing_rate]), los_angle, los_angle_rate, # sensor data
             self.interceptor.pos, self.interceptor.vel, # reflecting interceptor state
         ])
 
-    def _get_reward(self, action, oversteered, status, dt):
+    def _get_reward(self, action, oversteering_magnitude, status, dt):
         # The less the distance, the higher the reward
         dist = np.linalg.norm(self.interceptor.pos - self.target.pos)
         dist_reward = -dist / self.start_distance
 
         # We want to reward the interceptor for closing in on the target
-        closing_rate = (self.last_distance - dist) / dt
-        dist_reward += closing_rate
+        closing_rate_reward = (self.last_distance - dist) * dt
 
         # We want to reward/punish the interceptor for certain events
         event_reward = 0.0
         if status == "hit":
-            event_reward = +10
+            event_reward = +2
         elif status == "crashed":
-            event_reward = -10
-        elif status == "expired":
             event_reward = -5
-
-        # We want to punish the interceptor for oversteering
-        if oversteered:
-            event_reward -= 10
+        elif status == "expired":
+            event_reward = -1
+            
         
         # We want to keep the interceptor energy efficient (less commands = better)
         action_punishment = -np.linalg.norm(action) / self.interceptor.max_acc_magnitude
 
         # We want the interceptor to avoid the ground (z < 0)
-        ground_penalty = -np.exp(-self.interceptor.pos[2] / 50) if self.interceptor.pos[2] < 50 else 0
+        interceptor_altidude = self.interceptor.pos[2]
+        safe_altitude = 1000
 
-        reward = dist_reward + event_reward + action_punishment + ground_penalty
+        # Exponential penalty for altitude below safe level
+        ground_penalty = -np.exp(-interceptor_altidude / safe_altitude) if status != "crashed" else -1.0
 
-        print(f"Reward: {reward} = Dist: {dist_reward:.2f} + Event: {event_reward:.2f} + Action: {action_punishment:.2f} + Ground: {ground_penalty:.2f}")
+        # Oversteering penalty
+        oversteering_panalty = -oversteering_magnitude
+
+        # Weighting the rewards
+        dist_reward *= 1.0
+        closing_rate_reward *= 3.0
+        event_reward *= 1.0
+        action_punishment *= 1.0
+        ground_penalty *= 2.0
+        oversteering_panalty *= 1.0
+
+
+        # Combine all rewards
+        reward = dist_reward + closing_rate_reward + event_reward + action_punishment + oversteering_panalty + ground_penalty
+        print(f"Reward: {reward:.2f} = (Distance) {dist_reward:.2f} + (Closing Rate) {closing_rate_reward:.2f} + (Event) {event_reward:.2f} + (Action) {action_punishment:.2f} + (Ground) {ground_penalty:.2f} + (Oversteering) {oversteering_panalty:.2f}")
 
         return reward
         
@@ -176,10 +191,13 @@ class MissileEnv(gym.Env):
     
     def _check_status(self):
         if self.interceptor.pos[2] < 0:
+            print ("Interceptor crashed into the ground")
             return "crashed"
         elif np.linalg.norm(self.interceptor.pos - self.target.pos) < 50:
+            print ("Interceptor hit the target")
             return "hit"
         elif self.sim_time > 50:
+            print ("Simulation expired")
             return "expired"
         else:
             return "ongoing"

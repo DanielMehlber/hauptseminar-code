@@ -1,5 +1,17 @@
 import numpy as np
 
+def mach_to_ms(mach: float) -> float:
+    """
+    Convert Mach number to meters per second.
+
+    Parameters:
+    - mach: Mach number.
+
+    Returns:
+    - Speed in meters per second.
+    """
+    return mach * 343.2  # Speed of sound at sea level in m/s
+
 def get_acceleration_of(v0: np.ndarray, v: np.ndarray, dt: float) -> np.ndarray:
     """
     Calculate the acceleration required to change velocity from v0 to v.

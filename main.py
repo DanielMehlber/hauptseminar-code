@@ -4,14 +4,14 @@ from models.missile import MissileModel
 from stable_baselines3 import SAC
 
 settings = MissileEnvSettings()
-settings.time_speed = 1.0
+settings.time_speed = 10.0
 
-target = MissileModel(velocity=np.array([0.0, 50.0, 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -10000.0, 5000.0]))
+target = MissileModel(velocity=np.array([0.0, 50.0, 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -1000.0, 5000.0]))
 interceptor = MissileModel(velocity=np.array([0.0, 0.0, 100.0]), max_acc=50 * 9.81, pos=np.array([0.0, 0.0, 0.0]))
 
 env = MissileEnv(settings=settings, interceptor=interceptor, target=target)
 
-model = SAC("MlpPolicy", env, verbose=1, tensorboard_log="./sac_missile_tensorboard/")
+model = SAC("MlpPolicy", env, verbose=1, tensorboard_log="./.logs/sac")
 model.learn(total_timesteps=10000)
 
 print("Simulation finished.")

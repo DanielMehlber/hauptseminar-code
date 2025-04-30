@@ -41,15 +41,15 @@ class MissileEnv(gym.Env):
 
     def _line_of_sight_angle(self):
         # Calculate the angle between the interceptor and target positions
-        world_los_vector = self.target.pos - self.interceptor.pos
+        world_space_los_vector = self.target.pos - self.interceptor.pos
         
         # transform to interceptor space: we want to calculate the LOS angle 
         # from the interceptor's perspective
-        reference = self.interceptor.orientation_matrix
-        missile_los_vector = reference @ world_los_vector
-        missile_los_vector /= np.linalg.norm(missile_los_vector)
+        missile_reference = self.interceptor.orientation_matrix.T
+        missile_space_los_vector = missile_reference @ world_space_los_vector
+        missile_space_los_vector /= np.linalg.norm(missile_space_los_vector)
 
-        x, y, z = missile_los_vector
+        x, y, z = missile_space_los_vector
         norm_xy = np.sqrt(x**2 + y**2)
 
         # azimuth (horizontal) angle in body-frame: −π … +π
@@ -153,9 +153,11 @@ class MissileEnv(gym.Env):
         # norm measurements to avoid flooding the network
         norm_distance = distance / self.start_distance
         norm_closing_rate = closing_rate / self.start_distance
+        norm_los_angle = los_angle / np.pi
+        norm_los_angle_rate = los_angle_rate / np.pi
 
         return np.concatenate([
-            np.array([norm_distance]), np.array([norm_closing_rate]), los_angle, los_angle_rate, # seeker data
+            np.array([norm_distance]), np.array([norm_closing_rate]), norm_los_angle, norm_los_angle_rate, # seeker data
             interceptor_orientation, interceptor_turn_rate, # internal sensor data
         ])
 
@@ -192,7 +194,7 @@ class MissileEnv(gym.Env):
         closing_rate_reward *= 3.0
         event_reward *= 10.0
         action_punishment *= 5.0
-        ground_penalty *= 10.0
+        ground_penalty *= 10.0 
 
         # Combine all rewards
         reward = dist_reward + closing_rate_reward + event_reward + action_punishment + ground_penalty

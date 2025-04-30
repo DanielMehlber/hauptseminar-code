@@ -25,7 +25,7 @@ class MissileEnv(gym.Env):
         self.target = target
         self.interceptor = interceptor
 
-        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(12,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(11,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         self.visualizer = MissileVisualizer(fit_view=True)
@@ -38,6 +38,25 @@ class MissileEnv(gym.Env):
         self.last_los_angle = None # required to calculate line-of-sight angle rate
 
         self.reset()
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.interceptor.reset()
+        self.target.reset()
+        self.trajectory = []
+        self.sim_time = 0.0
+
+        # data for display in visualizer
+        self.last_step_time = time.time()
+        self.last_acc_command = np.zeros(2, dtype=np.float32)
+        self.last_missile_orientation_matrix = np.eye(3, dtype=np.float32)
+
+        self.visualizer.reset()
+
+        # init sensor state for differential measurements
+        self._update_sensor_data()
+
+        return self._get_obs(self.settings.min_dt), {}
 
     def _line_of_sight_angle(self):
         # Calculate the angle between the interceptor and target positions
@@ -69,25 +88,11 @@ class MissileEnv(gym.Env):
         self.last_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
 
         # required for turning rate of interceptor
-        interceptor_velocity = self.interceptor.velocity()
+        interceptor_velocity = self.interceptor.get_velocity()
         self.last_interceptor_orientation = interceptor_velocity / np.linalg.norm(interceptor_velocity)
 
         # required for line-of-sight angle rate
         self.last_los_angle = self._line_of_sight_angle()
-
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        self.interceptor.reset()
-        self.target.reset()
-        self.trajectory = []
-        self.sim_time = 0.0
-        self.last_step_time = time.time()
-        self.visualizer.reset()
-
-        # init sensor state for differential measurements
-        self._update_sensor_data()
-
-        return self._get_obs(self.settings.min_dt), {}
 
     def step(self, action):
         dt = 0.0
@@ -116,6 +121,9 @@ class MissileEnv(gym.Env):
         self.target.accelerate(np.array([0.0, 0.0]), dt=dt, t=self.sim_time)
         self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
 
+        # Update values for visualization
+        self.last_acc_command = action.copy()
+        self.last_missile_orientation_matrix = self.interceptor.orientation_matrix.copy()
         self.trajectory.append((self.interceptor.pos.copy(), self.target.pos.copy()))
 
         obs = self._get_obs(dt)
@@ -131,7 +139,11 @@ class MissileEnv(gym.Env):
 
     def render(self):
         if len(self.trajectory) > 3:
-            self.visualizer.update(self.interceptor.pos, self.target.pos, sim_time=self.sim_time)
+            self.visualizer.update(self.interceptor.pos, self.target.pos, 
+                                   sim_time=self.sim_time, 
+                                   accel_command=self.last_acc_command, 
+                                   orientation_matrix=self.interceptor.orientation_matrix.T, 
+                                   los_angles=self.last_los_angle)
 
     def _get_obs(self, dt):
         # seeker distance and closing rate to the target
@@ -143,12 +155,19 @@ class MissileEnv(gym.Env):
         los_angle_rate = (los_angle - self.last_los_angle) / dt
 
         # interceptor orientation (e.g. by gyroscopes)
-        interceptor_velocity = self.interceptor.velocity()
-        interceptor_orientation = interceptor_velocity / np.linalg.norm(interceptor_velocity)
+        world_space_interceptor_velocity = self.interceptor.get_velocity()
+        world_space_interceptor_orientation = world_space_interceptor_velocity / np.linalg.norm(world_space_interceptor_velocity)
         
-        # interceptor turn rate (e.g. by gyroscopes)
-        interceptor_turn_rate = self.last_interceptor_orientation - interceptor_orientation
-        interceptor_turn_rate /= dt
+        # interceptor turn angles in missile space (e.g. by gyroscopes)
+        missile_space_last_interceptor_orientation = self.interceptor.orientation_matrix.T @ self.last_interceptor_orientation
+        missile_space_yaw_angle, missile_space_pitch_angle = self.interceptor.calculate_local_angles_to(missile_space_last_interceptor_orientation)
+        missile_space_pitch_angle *= -1.0 # invert pitch angle to match the interceptor's coordinate system
+        missile_space_yaw_angle *= -1.0 # invert yaw angle to match the interceptor's coordinate system
+
+        # interceptor turn rate in missile space (e.g. by gyroscopes)
+        missile_space_turn_angles = np.array([missile_space_yaw_angle, missile_space_pitch_angle])
+        norm_missile_space_turn_angles = missile_space_turn_angles / np.pi # normalize to [-1, 1]
+        missile_space_turn_rate = norm_missile_space_turn_angles / dt
 
         # norm measurements to avoid flooding the network
         norm_distance = distance / self.start_distance
@@ -158,7 +177,7 @@ class MissileEnv(gym.Env):
 
         return np.concatenate([
             np.array([norm_distance]), np.array([norm_closing_rate]), norm_los_angle, norm_los_angle_rate, # seeker data
-            interceptor_orientation, interceptor_turn_rate, # internal sensor data
+            world_space_interceptor_orientation, missile_space_turn_rate, # internal sensor data (gyroscopes, etc)
         ])
 
     def _get_reward(self, action, status, dt):

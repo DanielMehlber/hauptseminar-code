@@ -106,11 +106,11 @@ def euler_to_rotation_matrix(euler_angles: np.ndarray) -> np.ndarray:
     return Rz @ Ry @ Rx
 
 
-def gramm_schmidt(v: np.ndarray, reference: np.ndarray) -> np.ndarray:
+def gramm_schmidt_ortho(v: np.ndarray, reference: np.ndarray) -> np.ndarray:
     """
     Perform Gram-Schmidt orthogonalization to find an orthonormal basis.
     
-    Parameters:
+    Inputs:
     - v: The vector to be orthogonalized (3D numpy array).
     - reference: The reference vector (3D numpy array).
 

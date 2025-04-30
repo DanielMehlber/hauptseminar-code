@@ -8,8 +8,8 @@ settings = MissileEnvSettings()
 settings.time_step = 0.1
 settings.realtime = False
 
-target = MissileModel(velocity=np.array([0.0, physics.mach_to_ms(5), 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -30_000.0, 80_000.0]))
-interceptor = MissileModel(velocity=np.array([0.0, 0.0, physics.mach_to_ms(8.0)]), max_acc=50 * 9.81, pos=np.array([0.0, 0.0, 100.0]))
+target = MissileModel(velocity=np.array([0.0, physics.mach_to_ms(3), 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -30_000.0, 60_000.0]))
+interceptor = MissileModel(velocity=np.array([0.0, 0.0, physics.mach_to_ms(5.0)]), max_acc=100 * 9.81, pos=np.array([0.0, 0.0, 100.0]))
 
 env = MissileEnv(settings=settings, interceptor=interceptor, target=target)
 

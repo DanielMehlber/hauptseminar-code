@@ -26,9 +26,11 @@ class MissileEnv(gym.Env):
         self.interceptor = interceptor
 
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(12,), dtype=np.float32)
-        self.action_space = spaces.Box(low=-500, high=500, shape=(2,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         self.visualizer = MissileVisualizer(fit_view=True)
+
+        # required as anchor point to normalize distance measurements
         self.start_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
 
         # required to calculate observations (which as basically changes in position and velocity)
@@ -43,7 +45,7 @@ class MissileEnv(gym.Env):
         
         # transform to interceptor space: we want to calculate the LOS angle 
         # from the interceptor's perspective
-        reference = self.interceptor.get_orientation_matrix()
+        reference = self.interceptor.orientation_matrix
         missile_los_vector = reference @ world_los_vector
         missile_los_vector /= np.linalg.norm(missile_los_vector)
 
@@ -62,9 +64,15 @@ class MissileEnv(gym.Env):
         return np.array([h_angle, v_angle], dtype=np.float32)
     
 
-
     def _update_sensor_data(self):
+        # required for delta-distance in observations (closing rate)
         self.last_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
+
+        # required for turning rate of interceptor
+        interceptor_velocity = self.interceptor.velocity()
+        self.last_interceptor_orientation = interceptor_velocity / np.linalg.norm(interceptor_velocity)
+
+        # required for line-of-sight angle rate
         self.last_los_angle = self._line_of_sight_angle()
 
     def reset(self, seed=None, options=None):
@@ -75,15 +83,15 @@ class MissileEnv(gym.Env):
         self.sim_time = 0.0
         self.last_step_time = time.time()
         self.visualizer.reset()
-    
-        self.last_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
-        self.last_los_angle = self._line_of_sight_angle()
+
+        # init sensor state for differential measurements
+        self._update_sensor_data()
 
         return self._get_obs(self.settings.min_dt), {}
 
     def step(self, action):
         dt = 0.0
-        if not self.settings.realtime:
+        if self.settings.realtime:
             step_time = time.time()
             real_dt = step_time - self.last_step_time
 
@@ -105,15 +113,15 @@ class MissileEnv(gym.Env):
             self.sim_time += dt
 
         # Update entities with scaled delta time
-        self.target.accelerate(np.zeros(2), dt=dt, t=self.sim_time)
-        oversteering_magnitude = self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
+        self.target.accelerate(np.array([0.0, 0.0]), dt=dt, t=self.sim_time)
+        self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
 
         self.trajectory.append((self.interceptor.pos.copy(), self.target.pos.copy()))
 
         obs = self._get_obs(dt)
         status = self._check_status()
         done = self._check_done(status)
-        reward = self._get_reward(action, oversteering_magnitude, status, dt)
+        reward = self._get_reward(action, status, dt)
         
         # Update after reward calculation because it needs the last sensor data
         self._update_sensor_data()
@@ -126,20 +134,32 @@ class MissileEnv(gym.Env):
             self.visualizer.update(self.interceptor.pos, self.target.pos, sim_time=self.sim_time)
 
     def _get_obs(self, dt):
-        # closing rate to the target
+        # seeker distance and closing rate to the target
         distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
         closing_rate = (self.last_distance - distance) / dt
 
-        # line-of-sight angle rate
+        # seeker line-of-sight angle rate
         los_angle = self._line_of_sight_angle()
         los_angle_rate = (los_angle - self.last_los_angle) / dt
 
+        # interceptor orientation (e.g. by gyroscopes)
+        interceptor_velocity = self.interceptor.velocity()
+        interceptor_orientation = interceptor_velocity / np.linalg.norm(interceptor_velocity)
+        
+        # interceptor turn rate (e.g. by gyroscopes)
+        interceptor_turn_rate = self.last_interceptor_orientation - interceptor_orientation
+        interceptor_turn_rate /= dt
+
+        # norm measurements to avoid flooding the network
+        norm_distance = distance / self.start_distance
+        norm_closing_rate = closing_rate / self.start_distance
+
         return np.concatenate([
-            np.array([distance]), np.array([closing_rate]), los_angle, los_angle_rate, # sensor data
-            self.interceptor.pos, self.interceptor.vel, # reflecting interceptor state
+            np.array([norm_distance]), np.array([norm_closing_rate]), los_angle, los_angle_rate, # seeker data
+            interceptor_orientation, interceptor_turn_rate, # internal sensor data
         ])
 
-    def _get_reward(self, action, oversteering_magnitude, status, dt):
+    def _get_reward(self, action, status, dt):
         # The less the distance, the higher the reward
         dist = np.linalg.norm(self.interceptor.pos - self.target.pos)
         dist_reward = -dist / self.start_distance
@@ -158,7 +178,7 @@ class MissileEnv(gym.Env):
             
         
         # We want to keep the interceptor energy efficient (less commands = better)
-        action_punishment = -np.linalg.norm(action) / self.interceptor.max_acc_magnitude
+        action_punishment = -np.linalg.norm(action) / self.interceptor.max_lat_acc
 
         # We want the interceptor to avoid the ground (z < 0)
         interceptor_altidude = self.interceptor.pos[2]
@@ -167,24 +187,16 @@ class MissileEnv(gym.Env):
         # Exponential penalty for altitude below safe level
         ground_penalty = -np.exp(-interceptor_altidude / safe_altitude) if status != "crashed" else -1.0
 
-        # Oversteering penalty
-        oversteering_panalty = -oversteering_magnitude
-
         # Weighting the rewards
-        dist_reward *= 1.0
+        dist_reward *= 5.0
         closing_rate_reward *= 3.0
-        event_reward *= 1.0
-        action_punishment *= 1.0
-        ground_penalty *= 2.0
-        oversteering_panalty *= 1.0
-
+        event_reward *= 10.0
+        action_punishment *= 5.0
+        ground_penalty *= 10.0
 
         # Combine all rewards
-        reward = dist_reward + closing_rate_reward + event_reward + action_punishment + oversteering_panalty + ground_penalty
-        print(f"Reward: {reward:.2f} = (Distance) {dist_reward:.2f} + (Closing Rate) {closing_rate_reward:.2f} + (Event) {event_reward:.2f} + (Action) {action_punishment:.2f} + (Ground) {ground_penalty:.2f} + (Oversteering) {oversteering_panalty:.2f}")
-
+        reward = dist_reward + closing_rate_reward + event_reward + action_punishment + ground_penalty
         return reward
-        
 
     def _check_done(self, status):
         return status != "ongoing"

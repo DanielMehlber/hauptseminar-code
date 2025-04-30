@@ -29,6 +29,54 @@ def get_acceleration_of(v0: np.ndarray, v: np.ndarray, dt: float) -> np.ndarray:
     return dv / dt
 
 
+def rotate_x_matrix(angle: float) -> np.ndarray:
+    """
+    Create a rotation matrix for a rotation around the X-axis.
+
+    Parameters:
+    - angle: Angle in radians.
+
+    Returns:
+    - Rotation matrix (3x3 numpy array).
+    """
+    return np.array([
+        [1, 0, 0],
+        [0, np.cos(angle), -np.sin(angle)],
+        [0, np.sin(angle), np.cos(angle)]
+    ])
+
+def rotate_y_matrix(angle: float) -> np.ndarray:
+    """
+    Create a rotation matrix for a rotation around the Y-axis.
+
+    Parameters:
+    - angle: Angle in radians.
+
+    Returns:
+    - Rotation matrix (3x3 numpy array).
+    """
+    return np.array([
+        [np.cos(angle), 0, np.sin(angle)],
+        [0, 1, 0],
+        [-np.sin(angle), 0, np.cos(angle)]
+    ])
+
+def rotate_z_matrix(angle: float) -> np.ndarray:
+    """
+    Create a rotation matrix for a rotation around the Z-axis.
+
+    Parameters:
+    - angle: Angle in radians.
+
+    Returns:
+    - Rotation matrix (3x3 numpy array).
+    """
+    return np.array([
+        [np.cos(angle), -np.sin(angle), 0],
+        [np.sin(angle), np.cos(angle), 0],
+        [0, 0, 1]
+    ])
+
 def euler_to_rotation_matrix(euler_angles: np.ndarray) -> np.ndarray:
     # Unpack Euler angles
     rx, ry, rz = euler_angles
@@ -56,3 +104,28 @@ def euler_to_rotation_matrix(euler_angles: np.ndarray) -> np.ndarray:
     
     # Total rotation matrix
     return Rz @ Ry @ Rx
+
+
+def gramm_schmidt(v: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """
+    Perform Gram-Schmidt orthogonalization to find an orthonormal basis.
+    
+    Parameters:
+    - v: The vector to be orthogonalized (3D numpy array).
+    - reference: The reference vector (3D numpy array).
+
+    Returns:
+    - v1: The normalized version of the input vector.
+    - v2: The orthogonalized vector to the reference vector.
+    - v3: The cross product of v1 and v2, which is orthogonal to both.
+    
+    """
+    v1 = v / np.linalg.norm(v)
+
+    v2 = reference - np.dot(reference, v) * v
+    v2 = v2 / np.linalg.norm(v2)
+    
+    v3 = np.cross(v1, v2)
+    v3 = v3 / np.linalg.norm(v3)
+
+    return v1, v2, v3

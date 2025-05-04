@@ -168,6 +168,12 @@ class MissileModel:
         world_space_new_velocity_vec = self.get_velocity()
         self.pos += world_space_new_velocity_vec * dt
 
+    def _clamp_accleration(self, lat_acc: np.ndarray) -> np.ndarray:
+        magnitude = np.linalg.norm(lat_acc)
+        if magnitude > self.max_lat_acc:
+            lat_acc = lat_acc / magnitude * self.max_lat_acc
+        return lat_acc
+
     def accelerate(self, lat_acc: np.ndarray, dt=0.1, t=0.0):
         """
         Tries to execute a guidance acceleration command. If the physical model
@@ -179,6 +185,7 @@ class MissileModel:
             dt (float): the delta time in which the command should be executed in seconds
             t (float): the total time of the simulation in seconds
         """
+        lat_acc = self._clamp_accleration(lat_acc)
         acc_command = lat_acc * self.max_axes_acc # convert percentage to m/s^2
         self._apply_acceleration(acc_command, dt)
     

@@ -2,9 +2,10 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import time
-from gym.visualisation import MissileVisualizer
+import gym.episode as ep
 import time
 from models.missile import MissileModel
+import math
 
 
 class MissileEnvSettings:
@@ -28,22 +29,21 @@ class MissileEnv(gym.Env):
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(11,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
-        self.visualizer = MissileVisualizer(fit_view=True)
-
         # required as anchor point to normalize distance measurements
         self.start_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
 
         # required to calculate observations (which as basically changes in position and velocity)
-        self.last_distance = None # required to calculate closing rate
-        self.last_los_angle = None # required to calculate line-of-sight angle rate
+        self.last_distance: float = None # required to calculate closing rate
+        self.last_los_angle: np.ndarray = None # required to calculate line-of-sight angle rate
+
+        self.current_episode: ep.Episode = None # current episode object
 
         self.reset()
 
-    def reset(self, seed=None, options=None):
+    def reset(self, seed=None):
         super().reset(seed=seed)
         self.interceptor.reset()
         self.target.reset()
-        self.trajectory = []
         self.sim_time = 0.0
 
         # data for display in visualizer
@@ -51,12 +51,11 @@ class MissileEnv(gym.Env):
         self.last_acc_command = np.zeros(2, dtype=np.float32)
         self.last_missile_orientation_matrix = np.eye(3, dtype=np.float32)
 
-        self.visualizer.reset()
-
         # init sensor state for differential measurements
         self._update_sensor_data()
+        self.current_episode = ep.Episode()
 
-        return self._get_obs(self.settings.min_dt), {}
+        return self._get_obs(self.settings.min_dt)
 
     def _line_of_sight_angle(self):
         # Calculate the angle between the interceptor and target positions
@@ -94,6 +93,24 @@ class MissileEnv(gym.Env):
         # required for line-of-sight angle rate
         self.last_los_angle = self._line_of_sight_angle()
 
+    def _update_episode_data(self):
+        # Update the episode data with the current state of the interceptor and target
+        interceptor_state = ep.InterceptorState(
+            position=self.interceptor.pos.copy(),
+            velocity=self.interceptor.get_velocity().copy(),
+            command=self.last_acc_command.copy(),
+            los_angle=self.last_los_angle.copy()
+        )
+
+        target_state = ep.TargetState(
+            position=self.target.pos.copy(),
+            velocity=self.target.get_velocity().copy()
+        )
+
+        # Add the states to the episode
+        self.current_episode.target_states.add(self.sim_time, target_state)
+        self.current_episode.get_interceptor("Agent").states.add(self.sim_time, interceptor_state)
+
     def step(self, action):
         dt = 0.0
         if self.settings.realtime:
@@ -124,7 +141,6 @@ class MissileEnv(gym.Env):
         # Update values for visualization
         self.last_acc_command = action.copy()
         self.last_missile_orientation_matrix = self.interceptor.orientation_matrix.copy()
-        self.trajectory.append((self.interceptor.pos.copy(), self.target.pos.copy()))
 
         obs = self._get_obs(dt)
         status = self._check_status()
@@ -132,18 +148,13 @@ class MissileEnv(gym.Env):
         reward = self._get_reward(action, status, dt)
         
         # Update after reward calculation because it needs the last sensor data
-        self._update_sensor_data()
-        self.render()
-        
+        self._update_sensor_data()        
+        self._update_episode_data()
+
         return obs, reward, done, False, {}
 
     def render(self):
-        if len(self.trajectory) > 3:
-            self.visualizer.update(self.interceptor.pos, self.target.pos, 
-                                   sim_time=self.sim_time, 
-                                   accel_command=self.last_acc_command, 
-                                   orientation_matrix=self.interceptor.orientation_matrix.T, 
-                                   los_angles=self.last_los_angle)
+        pass
 
     def _get_obs(self, dt):
         # seeker distance and closing rate to the target
@@ -234,4 +245,5 @@ class MissileEnv(gym.Env):
             return "expired"
         else:
             return "ongoing"
+    
 

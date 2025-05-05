@@ -23,7 +23,7 @@ class AbstractVisualizer(abc.ABC):
         raise NotImplementedError("playback method not implemented.")
     
     @abc.abstractmethod
-    def save_playback(self, filename: str):
+    def save_playback(self, filename: str, time: float, speed: float = 1.0, fps: int = 10):
         """
         Save the visualization to a file.
         

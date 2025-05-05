@@ -1,3 +1,6 @@
+import os
+from tempfile import TemporaryDirectory
+import imageio
 import numpy as np
 import plotly.graph_objects as go
 from gym.episode import Episode
@@ -15,8 +18,8 @@ class PlotlyVisualizer(AbstractVisualizer):
     """
     def __init__(self, episode: Episode = None):
         # Use FigureWidget for interactive updating
-        self.fig = go.FigureWidget()
-        self.fig.update_layout(
+        self.trajectories_figure = go.FigureWidget()
+        self.trajectories_figure.update_layout(
             scene=dict(
                 xaxis_title='X',
                 yaxis_title='Y',
@@ -89,14 +92,14 @@ class PlotlyVisualizer(AbstractVisualizer):
 
         # First-time creation
         if self.target_trace is None:
-            self.target_trace = self.fig.add_trace(go.Scatter3d(
+            self.target_trace = self.trajectories_figure.add_trace(go.Scatter3d(
                 x=xs_t, y=ys_t, z=zs_t,
                 mode='lines',
                 line=dict(color='red', width=2),
                 name='Target'
             )).data[-1]
 
-            self.target_point = self.fig.add_trace(go.Scatter3d(
+            self.target_point = self.trajectories_figure.add_trace(go.Scatter3d(
                 x=[xs_t[-1]] if xs_t else [],
                 y=[ys_t[-1]] if ys_t else [],
                 z=[zs_t[-1]] if zs_t else [],
@@ -129,7 +132,7 @@ class PlotlyVisualizer(AbstractVisualizer):
                 xs_i, ys_i, zs_i = [], [], []
 
             if iid not in self.interceptor_traces:
-                trace = self.fig.add_trace(go.Scatter3d(
+                trace = self.trajectories_figure.add_trace(go.Scatter3d(
                     x=xs_i, y=ys_i, z=zs_i,
                     mode='lines',
                     line=dict(color='blue', width=2),
@@ -137,7 +140,7 @@ class PlotlyVisualizer(AbstractVisualizer):
                     name=f'Interceptor {iid}'
                 )).data[-1]
 
-                point_trace = self.fig.add_trace(go.Scatter3d(
+                point_trace = self.trajectories_figure.add_trace(go.Scatter3d(
                     x=[xs_i[-1]] if xs_i else [],
                     y=[ys_i[-1]] if ys_i else [],
                     z=[zs_i[-1]] if zs_i else [],
@@ -162,35 +165,42 @@ class PlotlyVisualizer(AbstractVisualizer):
                     point_trace.y = []
                     point_trace.z = []
 
-    def _plot(self, sim_time):
+    def _plot_trajectories(self, sim_time):
         """
         Plot the target and interceptors at the given simulation time.
         """
+
+        camera = self.trajectories_figure.layout.scene.camera
+
+        x_limits, y_limits, z_limits = self._get_episode_limits(sim_time)
+        self.trajectories_figure.update_layout(
+            scene=dict(
+                xaxis=dict(range=x_limits),
+                yaxis=dict(range=y_limits),
+                zaxis=dict(range=z_limits),
+                camera = camera
+            ),
+            title=f'Episode Visualization at Time: {sim_time:.2f}s'
+        )
+
         self._plot_target(sim_time)
         self._plot_interceptors(sim_time)
+
+    def _plot(self, sim_time):
+        if self.episode is None:
+            raise RuntimeError("No episode data set. Call set_episode_data first.")
+
+        self._plot_trajectories(sim_time)
 
     def render(self, sim_time: float):
         """
         Render all trajectories up to the given time. Updates traces in the Plotly FigureWidget.
         """
-        if self.episode is None:
-            raise RuntimeError("No episode data set. Call set_episode_data first.")
-
-        x_limits, y_limits, z_limits = self._get_episode_limits(sim_time)
-        self.fig.update_layout(
-            scene=dict(
-                xaxis=dict(range=x_limits),
-                yaxis=dict(range=y_limits),
-                zaxis=dict(range=z_limits)
-            ),
-            title=f'Episode Visualization at Time: {sim_time:.2f}s'
-        )
-
         self._plot(sim_time)
         
         # display the figure
         if not self.displaying:
-            display(self.fig)
+            display(self.trajectories_figure)
             self.displaying = True
 
     def playback(self, sim_time: float, speed: float = 1.0, fps: int = 1):
@@ -204,16 +214,6 @@ class PlotlyVisualizer(AbstractVisualizer):
         if self.episode is None:
             raise RuntimeError("No episode data set. Call set_episode_data first.")
         
-        x_limits, y_limits, z_limits = self._get_episode_limits(sim_time)
-        self.fig.update_layout(
-            scene=dict(
-                xaxis=dict(range=x_limits),
-                yaxis=dict(range=y_limits),
-                zaxis=dict(range=z_limits)
-            ),
-            title=f'Episode Visualization at Time: {sim_time:.2f}s'
-        )
-
         frames = sim_time * fps / speed
         times = np.linspace(0, sim_time, int(frames))
 
@@ -227,27 +227,28 @@ class PlotlyVisualizer(AbstractVisualizer):
                 time.sleep(interval - elapsed)
             
             last_time = time.time()  # Update last_time after sleeping
-
             self._plot(t)
 
             if not self.displaying:
-                display(self.fig)
+                display(self.trajectories_figure)
                 self.displaying = True
 
-    def save_playback(self, filename: str):
-        pass
+    def save_playback(self, sim_time: float, output_path: str, width: int = 800, height: int = 600, fps: int = 20, speed: float = 1.0):
+        raise NotImplementedError("Saving playback is not implemented in PlotlyVisualizer.")
         
     def reset(self):
         """
         Remove all traces and reset.
         """
-        self.fig.data = []
+        self.trajectories_figure.data = []
         self.interceptor_traces = {}
         self.target_trace = None
         self.target_point = None
+
+        self.displaying = False  # Reset display flag
 
     def close(self):
         """
         Dispose of the figure.
         """
-        self.fig = None
+        self.trajectories_figure = None

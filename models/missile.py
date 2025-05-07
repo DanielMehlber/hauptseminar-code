@@ -2,7 +2,12 @@ import numpy as np
 import models.physics as physics
 import math
 
-class MissileModel:
+class PhysicalMissleModel:
+    """
+    A missile's model is based on rigid body motion and other physical principles. It is purely physical
+    and does not emit and actions or observations. It sole purpose is to keep the missile's physical state
+    and to apply accelerations to it.
+    """
     def __init__(self, velocity=np.ndarray([0, 0, 100]), max_acc=50 * 9.81, pos=np.zeros(3)):
         """
         Initializes the missile's rigit body motion model in 3D space.

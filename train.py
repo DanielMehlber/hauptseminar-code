@@ -1,6 +1,6 @@
 from gym.environment import MissileEnv, MissileEnvSettings
 import numpy as np
-from models.missile import MissileModel
+from models.missile import PhysicalMissleModel
 from stable_baselines3 import SAC
 import models.physics as physics
 
@@ -8,8 +8,8 @@ settings = MissileEnvSettings()
 settings.time_step = 0.1
 settings.realtime = False
 
-target = MissileModel(velocity=np.array([0.0, physics.mach_to_ms(3), 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -30_000.0, 60_000.0]))
-interceptor = MissileModel(velocity=np.array([0.0, 0.0, physics.mach_to_ms(5.0)]), max_acc=100 * 9.81, pos=np.array([0.0, 0.0, 100.0]))
+target = PhysicalMissleModel(velocity=np.array([0.0, physics.mach_to_ms(3), 0.0]), max_acc=50 * 9.81, pos=np.array([0.0, -30_000.0, 60_000.0]))
+interceptor = PhysicalMissleModel(velocity=np.array([0.0, 0.0, physics.mach_to_ms(5.0)]), max_acc=100 * 9.81, pos=np.array([0.0, 0.0, 100.0]))
 
 env = MissileEnv(settings=settings, interceptor=interceptor, target=target)
 

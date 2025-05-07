@@ -1,7 +1,8 @@
-import numpy as np 
+import numpy as np
+from gym.observations import InterceptorObservations 
 
-class ProportionalNavigationAgent:
-    def __init__(self, max_acc: float, max_speed: float ,n: float):
+class ProportionalNavigationPilot:
+    def __init__(self, max_acc: float, max_speed: float, n: float):
         self.n = n
         self.max_speed = max_speed # required to convert norm closing rate to closing rate in m/s
         self.max_acc = max_acc # max acceleration in m/s^2
@@ -18,24 +19,13 @@ class ProportionalNavigationAgent:
         Returns:
             np.ndarray: The acceleration command for the interceptor.
         """
-        (
-            norm_distance_vec,          # distance to target (relative to initial distance)
-            norm_closing_rate_vec,      # closing rate (relative to max speed)
-            norm_los_angles_vec,        # line-of-sight angles (from radians to [-1, 1])
-            norm_los_angle_rates_vec,   # line-of-sight angle rates (from radians to [-1, 1])
-            _,
-            _,
-        ) = self._get_observations(observations)
-
-        # de-normlize to real world space (was relative to max-speed)
-        real_closing_rate_vec = norm_closing_rate_vec * self.max_speed
-        real_los_angle_rates_vec = norm_los_angle_rates_vec * np.pi
+        observations = InterceptorObservations(observations)
 
         # is a 3D vector, but we need 2D (we can ignore the closing rate along the longitudinal axis x)
-        real_closing_rate_vec = np.array([real_closing_rate_vec[1], real_closing_rate_vec[2]])
+        seeker_closing_rate_vec = np.array([observations.closing_rate_vec[1], observations.closing_rate_vec[2]])
 
         # proportional guidance law
-        real_acc_command = self.n * real_los_angle_rates_vec * real_closing_rate_vec
+        real_acc_command = self.n * observations.los_angle_rates_vec * seeker_closing_rate_vec
 
         # clamp the acceleration command to the max acceleration
         norm_acc_command = real_acc_command / self.max_acc

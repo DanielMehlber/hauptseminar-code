@@ -1,18 +1,20 @@
+from dataclasses import dataclass
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import time
 import data.episode as ep
 import time
-from models.missile import MissileModel
-import math
+from models.missile import PhysicalMissleModel
+from pilots.pilot import Pilot
+from gym.observations import InterceptorObservations
 
-
+@dataclass
 class MissileEnvSettings:
-    def __init__(self, realtime=False, time_step=1.0, min_dt=0.1):
-        self.time_step = time_step    # Speed multiplier for simulation (e.g., 1.0 = real-time)
-        self.min_dt = min_dt          # Minimum delta time for simulation steps
-        self.realtime = realtime      # If True, the simulation will run in real-time
+    time_step: float = 0.1          # Speed multiplier for simulation (e.g., 1.0 = real-time)
+    min_dt: float = 0.01            # Minimum delta time for simulation steps
+    realtime: bool = False          # If True, the simulation will run in real-time
+    time_limit: float = 60.0        # Time limit for the simulation in seconds
 
 
 class MissileEnv(gym.Env):
@@ -22,7 +24,11 @@ class MissileEnv(gym.Env):
     training and evaluation.
     """
 
-    def __init__(self, target: MissileModel, interceptor: MissileModel, settings=MissileEnvSettings()):
+    def __init__(self, target: PhysicalMissleModel, 
+                 interceptor: PhysicalMissleModel, 
+                 target_pilot: Pilot = None, 
+                 settings=MissileEnvSettings()):
+        
         super().__init__()
         self.settings = settings
         self.last_step_time = None
@@ -30,6 +36,7 @@ class MissileEnv(gym.Env):
 
         self.target = target
         self.interceptor = interceptor
+        self.target_pilot = target_pilot
 
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(16,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -49,6 +56,10 @@ class MissileEnv(gym.Env):
         super().reset(seed=seed)
         self.interceptor.reset()
         self.target.reset()
+
+        if self.target_pilot is not None:
+            self.target_pilot.reset()
+
         self.sim_time = 0.0
 
         # data for display in visualizer
@@ -60,7 +71,7 @@ class MissileEnv(gym.Env):
         self._update_sensor_data()
         self.current_episode = ep.Episode()
 
-        return self._get_obs(self.settings.min_dt)
+        return self._get_norm_observations(self.settings.min_dt).pack()
 
     def _line_of_sight_angle(self):
         # Calculate the angle between the interceptor and target positions
@@ -106,7 +117,7 @@ class MissileEnv(gym.Env):
             velocity=self.interceptor.get_velocity().copy(),
             command=self.last_acc_command.copy(),
             los_angle=self.missile_space_last_los_angle.copy(),
-            distance=np.linalg.norm(self.missile_space_last_los_vec), # distance to target in missile space
+            distance=np.linalg.norm(self.interceptor.pos - self.target.pos), # distance to target in missile space
         )
 
         target_state = ep.TargetState(
@@ -118,7 +129,7 @@ class MissileEnv(gym.Env):
         self.current_episode.target_states.add(self.sim_time, target_state)
         self.current_episode.get_interceptor("Agent").states.add(self.sim_time, interceptor_state)
 
-    def step(self, action):
+    def step(self, action, norm_observations=True):
         dt = 0.0
         if self.settings.realtime:
             step_time = time.time()
@@ -141,29 +152,46 @@ class MissileEnv(gym.Env):
             dt = self.settings.time_step
             self.sim_time += dt
 
+        # necessary to calculate differential measurements
+        self._update_sensor_data()        
+
+        # get target action from pilot (if available)
+        target_action = np.zeros(2, dtype=np.float32)
+        if self.target_pilot is not None:
+            target_action = self.target_pilot.step(dt, self.sim_time)
+
         # Update entities with scaled delta time
-        self.target.accelerate(np.array([0.0, 0.0]), dt=dt, t=self.sim_time)
+        self.target.accelerate(target_action, dt=dt, t=self.sim_time)
         self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
 
         # Update values for visualization
         self.last_acc_command = action.copy()
         self.last_missile_orientation_matrix = self.interceptor.orientation_matrix.copy()
 
-        obs = self._get_obs(dt)
+        # depending on rl agent or pilot, we can either normalize the observation space or not
+        obs = None
+        if norm_observations:
+            obs = self._get_norm_observations(dt)
+        else:
+            obs = self.get_interceptor_observations(dt)
+
         status = self._check_status()
         done = self._check_done(status)
         reward = self._get_reward(action, status, dt)
         
         # Update after reward calculation because it needs the last sensor data
-        self._update_sensor_data()        
         self._update_episode_data()
 
-        return obs, reward, done, False, {}
+        return obs.pack(), reward, done, False, {}
 
     def render(self):
         pass
 
-    def _get_obs(self, dt):
+    def get_interceptor_observations(self, dt) -> InterceptorObservations:
+        """
+        Returns the unnormalized observations for the interceptor. This includes data from
+        multiple sensors, like seekers and gyroscopes.
+        """
 
         # line-of-sight from interceptor to target (from seeker's point of view) - length is distance to target
         missile_space_los_vec = self.interceptor.orientation_matrix.T @ (self.target.pos - self.interceptor.pos) # target position in missile space
@@ -191,29 +219,35 @@ class MissileEnv(gym.Env):
         missile_space_turn_angles_vec = np.array([missile_space_yaw_angle, missile_space_pitch_angle])
         norm_missile_space_turn_angles_vec = missile_space_turn_angles_vec / np.pi # normalize to [-1, 1]
         missile_space_turn_rate_vec = norm_missile_space_turn_angles_vec / dt
+        
+        # create the observation object
+        observations = InterceptorObservations()
+        observations.distance_vec = missile_space_distance_vec
+        observations.closing_rate_vec = missile_space_closing_rate_vec
+        observations.los_angles_vec = missile_space_los_angles_vec
+        observations.los_angle_rates_vec = missile_space_los_angles_rate_vec
+        observations.world_space_interceptor_orientation = world_space_interceptor_orientation_vec
+        observations.missile_space_turn_rate = missile_space_turn_rate_vec
 
-        # norm measurements to avoid flooding the network
+        # pack all observations into a single vector
+        return observations
+    
+    def _get_norm_observations(self, dt: float) -> InterceptorObservations:
+        """
+        Returns the normalized observations for the interceptor. This includes data from
+        multiple sensors, like seekers and gyroscopes.
+        """
+        observations = self.get_interceptor_observations(dt)
+
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec) # to clamp vector values relative to the initial distance
 
         # TODO: think of better ways to normalize these values
-        norm_distance_vec = missile_space_los_vec / start_distance                              # relative to initial distance
-        norm_closing_rate_vec = missile_space_closing_rate_vec / self.interceptor.max_speed     # relative to max speed
-        norm_los_angles_vec = missile_space_los_angles_vec / np.pi                              # converted to interval [-1, 1] 
-        norm_los_angle_rates_vec = missile_space_los_angles_rate_vec / np.pi                    # converted to interval [-1, 1]
+        observations.distance_vec /= start_distance                                     # relative to initial distance
+        observations.closing_rate_vec /= self.interceptor.max_speed      # relative to max speed
+        observations.los_angles_vec /= np.pi                                            # converted to interval [-1, 1] 
+        observations.los_angle_rates_vec /= np.pi                                       # converted to interval [-1, 1]
 
-        # assert that no component is NaN of Inf
-        assert np.all(np.isfinite(norm_distance_vec)), "norm_distance_vec contains NaN or Inf values"
-        assert np.all(np.isfinite(norm_closing_rate_vec)), "norm_closing_rate_vec contains NaN or Inf values"
-        assert np.all(np.isfinite(norm_los_angles_vec)), "norm_los_angles_vec contains NaN or Inf values"
-        assert np.all(np.isfinite(norm_los_angle_rates_vec)), "norm_los_angle_rates_vec contains NaN or Inf values"
-        assert np.all(np.isfinite(world_space_interceptor_orientation_vec)), "world_space_interceptor_orientation_vec contains NaN or Inf values"
-        assert np.all(np.isfinite(missile_space_turn_rate_vec)), "missile_space_turn_rate_vec contains NaN or Inf values"
-
-        # pack all observations into a single vector
-        return np.concatenate([
-            norm_distance_vec, norm_closing_rate_vec, norm_los_angles_vec, norm_los_angle_rates_vec, # seeker data
-            world_space_interceptor_orientation_vec, missile_space_turn_rate_vec, # internal sensor data (gyroscopes, etc)
-        ])
+        return observations
 
     def _get_reward(self, action, status, dt):
         # The less the distance, the higher the reward
@@ -264,7 +298,7 @@ class MissileEnv(gym.Env):
         elif np.linalg.norm(self.interceptor.pos - self.target.pos) < 50:
             print ("Interceptor hit the target")
             return "hit"
-        elif self.sim_time > 50:
+        elif self.sim_time > self.settings.time_limit:
             print ("Simulation expired")
             return "expired"
         else:

@@ -2,7 +2,7 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import time
-import gym.episode as ep
+import data.episode as ep
 import time
 from models.missile import MissileModel
 import math
@@ -16,6 +16,11 @@ class MissileEnvSettings:
 
 
 class MissileEnv(gym.Env):
+    """
+    A custom environment for simulating missile interception scenarios. 
+    It employs a target and an interceptor missile model, allowing for reinforcement learning
+    training and evaluation.
+    """
 
     def __init__(self, target: MissileModel, interceptor: MissileModel, settings=MissileEnvSettings()):
         super().__init__()
@@ -26,15 +31,15 @@ class MissileEnv(gym.Env):
         self.target = target
         self.interceptor = interceptor
 
-        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(11,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(16,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         # required as anchor point to normalize distance measurements
-        self.start_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
+        self.missile_space_start_distance_vec = self.interceptor.orientation_matrix.T @ (self.target.pos - self.interceptor.pos)
 
         # required to calculate observations (which as basically changes in position and velocity)
-        self.last_distance: float = None # required to calculate closing rate
-        self.last_los_angle: np.ndarray = None # required to calculate line-of-sight angle rate
+        self.missile_space_last_los_vec: np.ndarray = None # required to calculate closing rate
+        self.missile_space_last_los_angle: np.ndarray = None # required to calculate line-of-sight angle rate
 
         self.current_episode: ep.Episode = None # current episode object
 
@@ -84,14 +89,15 @@ class MissileEnv(gym.Env):
 
     def _update_sensor_data(self):
         # required for delta-distance in observations (closing rate)
-        self.last_distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
+        world_space_los_vec = self.target.pos - self.interceptor.pos # in world space, but we need it from missile's pov
+        self.missile_space_last_los_vec = self.interceptor.orientation_matrix.T @ world_space_los_vec
 
         # required for turning rate of interceptor
-        interceptor_velocity = self.interceptor.get_velocity()
-        self.last_interceptor_orientation = interceptor_velocity / np.linalg.norm(interceptor_velocity)
+        world_space_interceptor_velocity = self.interceptor.get_velocity()
+        self.world_space_last_interceptor_orientation = world_space_interceptor_velocity / np.linalg.norm(world_space_interceptor_velocity)
 
-        # required for line-of-sight angle rate
-        self.last_los_angle = self._line_of_sight_angle()
+        # required for line-of-sight angle rate (from seeker's point of view)
+        self.missile_space_last_los_angle = self._line_of_sight_angle()
 
     def _update_episode_data(self):
         # Update the episode data with the current state of the interceptor and target
@@ -99,7 +105,8 @@ class MissileEnv(gym.Env):
             position=self.interceptor.pos.copy(),
             velocity=self.interceptor.get_velocity().copy(),
             command=self.last_acc_command.copy(),
-            los_angle=self.last_los_angle.copy()
+            los_angle=self.missile_space_last_los_angle.copy(),
+            distance=np.linalg.norm(self.missile_space_last_los_vec), # distance to target in missile space
         )
 
         target_state = ep.TargetState(
@@ -157,47 +164,64 @@ class MissileEnv(gym.Env):
         pass
 
     def _get_obs(self, dt):
-        # seeker distance and closing rate to the target
-        distance = np.linalg.norm(self.interceptor.pos - self.target.pos)
-        closing_rate = (self.last_distance - distance) / dt
+
+        # line-of-sight from interceptor to target (from seeker's point of view) - length is distance to target
+        missile_space_los_vec = self.interceptor.orientation_matrix.T @ (self.target.pos - self.interceptor.pos) # target position in missile space
+
+        # distance and closing rate to the target (from seekers point of view)
+        missile_space_distance_before_vec = np.abs(self.missile_space_last_los_vec) # we care about component-wise distance to target
+        missile_space_distance_vec = np.abs(missile_space_los_vec) # same here
+        missile_space_closing_rate_vec = (missile_space_distance_before_vec - missile_space_distance_vec) / dt # positive if closing in on target
 
         # seeker line-of-sight angle rate
-        los_angle = self._line_of_sight_angle()
-        los_angle_rate = (los_angle - self.last_los_angle) / dt
+        missile_space_los_angles_vec = self._line_of_sight_angle()
+        missile_space_los_angles_rate_vec = (self.missile_space_last_los_angle - missile_space_los_angles_vec) / dt
 
         # interceptor orientation (e.g. by gyroscopes)
-        world_space_interceptor_velocity = self.interceptor.get_velocity()
-        world_space_interceptor_orientation = world_space_interceptor_velocity / np.linalg.norm(world_space_interceptor_velocity)
+        world_space_interceptor_velocity_vec = self.interceptor.get_velocity()
+        world_space_interceptor_orientation_vec = world_space_interceptor_velocity_vec / np.linalg.norm(world_space_interceptor_velocity_vec)
         
         # interceptor turn angles in missile space (e.g. by gyroscopes)
-        missile_space_last_interceptor_orientation = self.interceptor.orientation_matrix.T @ self.last_interceptor_orientation
-        missile_space_yaw_angle, missile_space_pitch_angle = self.interceptor.calculate_local_angles_to(missile_space_last_interceptor_orientation)
+        missile_space_last_interceptor_orientation_vec = self.interceptor.orientation_matrix.T @ self.world_space_last_interceptor_orientation
+        missile_space_yaw_angle, missile_space_pitch_angle = self.interceptor.calculate_local_angles_to(missile_space_last_interceptor_orientation_vec)
         missile_space_pitch_angle *= -1.0 # invert pitch angle to match the interceptor's coordinate system
         missile_space_yaw_angle *= -1.0 # invert yaw angle to match the interceptor's coordinate system
 
         # interceptor turn rate in missile space (e.g. by gyroscopes)
-        missile_space_turn_angles = np.array([missile_space_yaw_angle, missile_space_pitch_angle])
-        norm_missile_space_turn_angles = missile_space_turn_angles / np.pi # normalize to [-1, 1]
-        missile_space_turn_rate = norm_missile_space_turn_angles / dt
+        missile_space_turn_angles_vec = np.array([missile_space_yaw_angle, missile_space_pitch_angle])
+        norm_missile_space_turn_angles_vec = missile_space_turn_angles_vec / np.pi # normalize to [-1, 1]
+        missile_space_turn_rate_vec = norm_missile_space_turn_angles_vec / dt
 
         # norm measurements to avoid flooding the network
-        norm_distance = distance / self.start_distance
-        norm_closing_rate = closing_rate / self.start_distance
-        norm_los_angle = los_angle / np.pi
-        norm_los_angle_rate = los_angle_rate / np.pi
+        start_distance = np.linalg.norm(self.missile_space_start_distance_vec) # to clamp vector values relative to the initial distance
 
+        # TODO: think of better ways to normalize these values
+        norm_distance_vec = missile_space_los_vec / start_distance                              # relative to initial distance
+        norm_closing_rate_vec = missile_space_closing_rate_vec / self.interceptor.max_speed     # relative to max speed
+        norm_los_angles_vec = missile_space_los_angles_vec / np.pi                              # converted to interval [-1, 1] 
+        norm_los_angle_rates_vec = missile_space_los_angles_rate_vec / np.pi                    # converted to interval [-1, 1]
+
+        # assert that no component is NaN of Inf
+        assert np.all(np.isfinite(norm_distance_vec)), "norm_distance_vec contains NaN or Inf values"
+        assert np.all(np.isfinite(norm_closing_rate_vec)), "norm_closing_rate_vec contains NaN or Inf values"
+        assert np.all(np.isfinite(norm_los_angles_vec)), "norm_los_angles_vec contains NaN or Inf values"
+        assert np.all(np.isfinite(norm_los_angle_rates_vec)), "norm_los_angle_rates_vec contains NaN or Inf values"
+        assert np.all(np.isfinite(world_space_interceptor_orientation_vec)), "world_space_interceptor_orientation_vec contains NaN or Inf values"
+        assert np.all(np.isfinite(missile_space_turn_rate_vec)), "missile_space_turn_rate_vec contains NaN or Inf values"
+
+        # pack all observations into a single vector
         return np.concatenate([
-            np.array([norm_distance]), np.array([norm_closing_rate]), norm_los_angle, norm_los_angle_rate, # seeker data
-            world_space_interceptor_orientation, missile_space_turn_rate, # internal sensor data (gyroscopes, etc)
+            norm_distance_vec, norm_closing_rate_vec, norm_los_angles_vec, norm_los_angle_rates_vec, # seeker data
+            world_space_interceptor_orientation_vec, missile_space_turn_rate_vec, # internal sensor data (gyroscopes, etc)
         ])
 
     def _get_reward(self, action, status, dt):
         # The less the distance, the higher the reward
         dist = np.linalg.norm(self.interceptor.pos - self.target.pos)
-        dist_reward = -dist / self.start_distance
+        dist_reward = -dist / np.linalg.norm(self.missile_space_start_distance_vec)
 
         # We want to reward the interceptor for closing in on the target
-        closing_rate_reward = (self.last_distance - dist) * dt
+        closing_rate_reward = (self.missile_space_last_los_vec - dist) * dt
 
         # We want to reward/punish the interceptor for certain events
         event_reward = 0.0

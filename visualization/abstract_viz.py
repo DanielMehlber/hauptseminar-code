@@ -1,5 +1,5 @@
 import abc
-import gym.episode as ep
+import data.episode as ep
 
 class AbstractVisualizer(abc.ABC):
 

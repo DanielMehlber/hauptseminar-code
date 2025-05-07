@@ -1,4 +1,6 @@
 **/__pycache__
 .logs
 **/*.gif
-npm-cache
+npm-*
+**/*.ipynb_checkpoints
+.ipynb_checkpoints

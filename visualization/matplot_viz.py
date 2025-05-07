@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import numpy as np
-import gym.episode as ep
+import data.episode as ep
 from matplotlib.animation import FuncAnimation
 from IPython.display import display, clear_output
 from visualization.abstract_viz import AbstractVisualizer
@@ -148,6 +148,9 @@ class MatplotVisualizer(AbstractVisualizer):
         ani.save(gif_file_name, writer='imagemagick', fps=fps)
         print(f"GIF saved as {gif_file_name}")
 
+        fig.clear()
+        plt.close(fig)
+
     def _render_single_image(self, time: float):
         if self.data is None:
             raise ValueError("No episode data set. Please set the episode data before creating an image.")
@@ -156,5 +159,5 @@ class MatplotVisualizer(AbstractVisualizer):
         fig = plt.figure(figsize=(12, 8))
         ax = fig.add_subplot(111, projection='3d')
         self._plot(time, ax)
-        display(fig)
-        plt.close(fig)
+        plt.show(fig)
+        # plt.close(fig)

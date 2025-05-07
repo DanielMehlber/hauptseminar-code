@@ -15,7 +15,7 @@ if __name__ == "__main__":
     interceptor = MissileModel(velocity=np.array([0.0, 0.0, physics.mach_to_ms(5.0)]), max_acc=100 * 9.81, pos=np.array([0.0, 0.0, 100.0]))
 
     env = MissileEnv(settings=settings, target=target, interceptor=interceptor, visualizer=visualizer)
-    agent = ProportionalNavigationAgent(speed=interceptor.speed, n=5.0)
+    agent = ProportionalNavigationAgent(speed=interceptor.max_speed, n=5.0)
 
     done = False
     obs = env.reset()

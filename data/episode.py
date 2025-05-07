@@ -1,6 +1,6 @@
 import numpy as np
 from dataclasses import dataclass, field
-from gym.time_series import *
+from data.time_series import *
 
 @dataclass
 class TargetState(Interpolatable):
@@ -14,17 +14,19 @@ class TargetState(Interpolatable):
 
 @dataclass
 class InterceptorState(Interpolatable):
-    position: np.ndarray # current position of the interceptor
-    velocity: np.ndarray # current velocity of the interceptor
-    command: np.ndarray # last issued acceleration command
-    los_angle: np.ndarray # line of sight angle to the target
+    position: np.ndarray    # current position of the interceptor
+    velocity: np.ndarray    # current velocity of the interceptor
+    command: np.ndarray     # last issued acceleration command
+    los_angle: np.ndarray   # line of sight angle to the target
+    distance: float         # distance to the target
 
     def interpolate(self, other: 'InterceptorState', alpha: float) -> 'InterceptorState':
         interpolated_position = interpolate_float(self.position, other.position, alpha)
         interpolated_velocity = interpolate_float(self.velocity, other.velocity, alpha)
         interpolated_command = interpolate_float(self.command, other.command, alpha)
         interpolated_los_angle = interpolate_float(self.los_angle, other.los_angle, alpha)
-        return InterceptorState(interpolated_position, interpolated_velocity, interpolated_command, interpolated_los_angle)
+        interpolated_distance = interpolate_float(self.distance, other.distance, alpha)
+        return InterceptorState(interpolated_position, interpolated_velocity, interpolated_command, interpolated_los_angle, interpolated_distance)
 
 @dataclass
 class Interceptor:

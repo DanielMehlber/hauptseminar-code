@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 import imageio
 import numpy as np
 import plotly.graph_objects as go
-from gym.episode import Episode
+from data.episode import Episode
 from visualization.abstract_viz import AbstractVisualizer
 from IPython.display import display
 

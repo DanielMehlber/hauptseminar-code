@@ -8,14 +8,14 @@ class MissileModel:
         Initializes the missile's rigit body motion model in 3D space.
 
         Args:
-            speed (float): The speed of the missile in m/s.
-            max_acc (float): The maximum possible lateral acceleration of the missile in m/s^2.
-            pos (np.ndarray): The initial position of the missile in 3D space.
+            velocity (np.ndarray): The initial velocity vector of the missile in m/s.
+            max_acc (float): The maximum lateral acceleration of the missile in m/s^2.
+            pos (np.ndarray): The initial position of the missile in m.
         """
         # required for resetting the missile to its initial state
         self.init_pos = pos.copy()
         self.init_velocity = velocity.copy()
-        self.speed = np.linalg.norm(velocity)
+        self.max_speed = np.linalg.norm(velocity)
 
         # limits
         self.max_lat_acc = max_acc
@@ -131,15 +131,18 @@ class MissileModel:
         6. Build a new orientation matrix from the new roll, yaw, and pitch axes (in world space).
         7. Apply the velocity vector to the current position of the missile (in world space).
 
+        Note that no roll is performed and all transformations are only in pitch and yaw. Automatic rolling could confuse
+        the reinforcement learning agent.
+
         TODO: There might be a more efficient way to do this, but this is a good start.
         """
         missile_space_roll_axis = np.array([1.0, 0.0, 0.0]) # x is forward (roll axis)
-        missile_space_velocity_vec = missile_space_roll_axis * self.speed
+        missile_space_velocity_vec = missile_space_roll_axis * self.max_speed
 
         # apply acceleration command to current velocity vector
         missile_space_acc = np.array([0.0, lat_acc[0], lat_acc[1]]) # y is left (pitch axis), z is up (yaw axis)
         missile_space_new_velocity_vec = missile_space_velocity_vec + missile_space_acc * dt
-        missile_space_new_velocity_vec *= self.speed / np.linalg.norm(missile_space_new_velocity_vec) # normalize to constant speed
+        missile_space_new_velocity_vec *= self.max_speed / np.linalg.norm(missile_space_new_velocity_vec) # normalize to constant speed
         missile_space_new_roll_axis = missile_space_new_velocity_vec / np.linalg.norm(missile_space_new_velocity_vec)
         
         # how much the missile has to turn to get to the new velocity vector
@@ -167,6 +170,11 @@ class MissileModel:
         # update world position of missile
         world_space_new_velocity_vec = self.get_velocity()
         self.pos += world_space_new_velocity_vec * dt
+
+        # assert that no components are NaN or Inf
+        assert np.any(np.isfinite(self.pos)), "Position contains NaN or Inf values."
+        assert np.any(np.isfinite(self.orientation_matrix)), "Orientation matrix contains NaN or Inf values."
+        assert np.any(np.isfinite(self.max_speed)), "Speed contains NaN or Inf values."
 
     def _clamp_accleration(self, lat_acc: np.ndarray) -> np.ndarray:
         magnitude = np.linalg.norm(lat_acc)
@@ -196,4 +204,4 @@ class MissileModel:
         Returns:
             np.ndarray: The current velocity vector of the missile in m/s.
         """
-        return self.orientation_matrix @ np.array([self.speed, 0.0, 0.0])
+        return self.orientation_matrix @ np.array([self.max_speed, 0.0, 0.0])

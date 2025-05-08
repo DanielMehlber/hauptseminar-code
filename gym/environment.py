@@ -38,7 +38,7 @@ class MissileEnv(gym.Env):
         self.interceptor = interceptor
         self.target_pilot = target_pilot
 
-        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(16,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(15,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         # required as anchor point to normalize distance measurements
@@ -71,7 +71,8 @@ class MissileEnv(gym.Env):
         self._update_sensor_data()
         self.current_episode = ep.Episode()
 
-        return self._get_norm_observations(self.settings.min_dt).pack()
+        info = {}
+        return self._get_norm_observations(self.settings.min_dt).pack(), info
 
     def _line_of_sight_angle(self):
         # Calculate the angle between the interceptor and target positions
@@ -255,7 +256,7 @@ class MissileEnv(gym.Env):
         dist_reward = -dist / np.linalg.norm(self.missile_space_start_distance_vec)
 
         # We want to reward the interceptor for closing in on the target
-        closing_rate_reward = (self.missile_space_last_los_vec - dist) * dt
+        closing_rate_reward = (np.linalg.norm(self.missile_space_last_los_vec) - dist) * dt
 
         # We want to reward/punish the interceptor for certain events
         event_reward = 0.0
@@ -286,7 +287,7 @@ class MissileEnv(gym.Env):
 
         # Combine all rewards
         reward = dist_reward + closing_rate_reward + event_reward + action_punishment + ground_penalty
-        return reward
+        return float(reward)
 
     def _check_done(self, status):
         return status != "ongoing"

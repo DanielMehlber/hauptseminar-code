@@ -73,6 +73,12 @@ class TimeSeries(Generic[T]):
         if time in self.all:
             return self.all[time]
 
+        # check if time is before or after the first or last time point
+        if time < min(self.all.keys()):
+            return self.all[min(self.all.keys())]
+        if time > max(self.all.keys()):
+            return self.all[max(self.all.keys())]
+
         # Find the two closest time points
         times = sorted(self.all.keys())
         for i in range(len(times) - 1):

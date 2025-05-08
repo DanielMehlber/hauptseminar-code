@@ -84,8 +84,9 @@ class MatplotVisualizer(AbstractVisualizer):
         for id, states in interceptor_states.items():
             if states:
                 positions = [s.position for _, s in states.items()]
+                current_distance = self.data.interceptors[id].states.get(time).distance
                 x, y, z = zip(*positions)
-                ax.plot(x, y, z, c='b')
+                ax.plot(x, y, z, c='b', label=f'{id} ({current_distance:.2f}m)')
                 last = states[max(states.keys())]
                 ax.scatter(*last.position, c='b', marker='o', s=100)
 

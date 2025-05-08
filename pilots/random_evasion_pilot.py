@@ -2,10 +2,20 @@ from pilots.pilot import Pilot
 import numpy as np
 
 class RandomEvasionPilot(Pilot):
-    def __init__(self, factor: float = 0.1):
+    def __init__(self, aggression: float = 0.1, trajectory_maintainance: float = 0.01):
+        """
+        This pilot generates random course diversions for the target, while still trying to 
+        maintain a smooth trajectory and its original course.
+
+        Args:
+            aggression (float): A factor to control the smoothness of the command. 
+                                Higher values lead to more aggressive evasions.
+            trajectory_maintainance (float): A factor to control how much the pilot tries to maintain the original trajectory.
+        """
         self._last_command = None
-        self.factor = factor  # Factor to control the smoothness of the command
+        self.aggresssion = aggression  # Factor to control the smoothness of the command
         self.deviation = np.zeros(2)  # Initialize deviation to zero
+        self.trajectory_maintainance = trajectory_maintainance
 
     def step(self, dt: float, t: float) -> np.ndarray:
         # Generate a smooth random acceleration command
@@ -13,10 +23,10 @@ class RandomEvasionPilot(Pilot):
             self._last_command = np.zeros(2)  # Initialize with a zero command
 
         # Add a small random change to the last command
-        delta = np.random.normal(loc=-self.deviation, scale=self.factor, size=2)
+        delta = np.random.normal(loc=-self.deviation, scale=self.aggresssion, size=2)
         new_command = self._last_command + delta * dt
 
-        self.deviation += new_command * 0.01 * dt
+        self.deviation += new_command * self.trajectory_maintainance * dt
 
         # Clip the command to ensure it stays within [0, 1]
         new_command = np.clip(new_command, 0, 1)

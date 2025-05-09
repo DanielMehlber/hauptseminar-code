@@ -8,6 +8,7 @@ import time
 from models.missile import PhysicalMissleModel
 from pilots.pilot import Pilot
 from gym.observations import InterceptorObservations
+import math
 
 @dataclass
 class MissileEnvSettings:
@@ -264,16 +265,19 @@ class MissileEnv(gym.Env):
         # We want to exponentially reward lower distances
         distance = np.linalg.norm(obs.distance_vec)
         relative_distance = distance / terminal_distance # relative to terminal distance [0, 1]
-        distance_reward = np.exp(1.0 - relative_distance / terminal_distance) - 1
+        # distance_reward = math.pow((1.0 - relative_distance) + 1.0, 2) - 1.0 # quadratic reward for distance
+        distance_reward = math.pow(3, (1.0 - relative_distance)) - 1.0 # exponential reward for distance [0, 2]
 
         # We also want to exponentially reward high closing rates
         distance_before = np.linalg.norm(self.missile_space_last_los_vec)
         closing_rate = (distance_before - distance) / dt
-        relative_closing_rate = closing_rate / terminal_distance
-        closing_reward = np.pow(relative_closing_rate, 3) # high reward for closing in, high penalty for moving away
+        relative_closing_rate = closing_rate / self.interceptor.max_speed # relative to max speed
+        fac = 1.0 if relative_closing_rate > 0 else -1.0
+        # closing_reward = (math.pow(1.0 + abs(relative_closing_rate), 2) - 1.0) * fac # quadratic reward for closing rate
+        closing_reward = (math.pow(3, abs(relative_closing_rate)) - 1.0) * fac # exponential reward for closing rate [-2, 2]
         
         # A slight action punishment should be employed to avoid unnecessary maneuvers
-        action_punishment = -np.linalg.norm(action)
+        action_punishment = -np.linalg.norm(action) # [0, 1]
 
         # We want to reward/punish the interceptor for certain events
         event_reward = 0.0
@@ -286,11 +290,11 @@ class MissileEnv(gym.Env):
 
         distance_reward *= 10.0
         closing_reward *= 10.0
-        action_punishment *= 1.0
+        action_punishment *= 0.5
         event_reward *= 5.0
 
         terminal_reward = distance_reward + closing_reward + action_punishment + event_reward
-        print(f"Terminal Reward {terminal_reward:.2f} = Distance {distance_reward:.2f} + Closing {closing_reward:.2f} + Action {action_punishment:.2f} + Event {event_reward:.2f}")
+        # print(f"Terminal Reward {terminal_reward:.2f} = Distance {distance_reward:.2f} + Closing {closing_reward:.2f} + Action {action_punishment:.2f} + Event {event_reward:.2f}")
         return terminal_reward
 
     def _get_midcourse_reward(self, obs: InterceptorObservations, 
@@ -359,7 +363,7 @@ class MissileEnv(gym.Env):
         # In closer vicinity to the target, we start the terminal phase. This value is proportional
         # to the velocity of the interceptor. As estimate, we take the distance the interceptor
         # travels over a short durtation of time (e.g. 2 seconds).
-        terminal_distance = self.interceptor.max_speed * 2 # distance = speed * time (1s)
+        terminal_distance = self.interceptor.max_speed * 3 # distance = speed * time (1s)
         if np.linalg.norm(obs.distance_vec) > terminal_distance:
             return self._get_midcourse_reward(obs, action, status, dt)
         else:
@@ -376,7 +380,6 @@ class MissileEnv(gym.Env):
             print ("Interceptor hit the target")
             return "hit"
         elif self.sim_time > self.settings.time_limit:
-            print ("Simulation expired")
             return "expired"
         else:
             return "ongoing"

@@ -129,3 +129,17 @@ def gramm_schmidt_ortho(v: np.ndarray, reference: np.ndarray) -> np.ndarray:
     v3 = v3 / np.linalg.norm(v3)
 
     return v1, v2, v3
+
+
+def project_on_plane(v: np.ndarray, plane_normal: np.ndarray) -> np.ndarray:
+    """
+    Project a vector onto a plane defined by its normal vector.
+
+    Parameters:
+    - v: The vector to be projected (3D numpy array).
+    - plane_normal: The normal vector of the plane (3D numpy array).
+
+    Returns:
+    - The projected vector (3D numpy array).
+    """
+    return v - np.dot(v, plane_normal) * plane_normal

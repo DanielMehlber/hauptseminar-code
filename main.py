@@ -1,6 +1,6 @@
 from gym.environment import MissileEnv, MissileEnvSettings
 import gym.visualisation.interactive as viz
-from pilots.proportional_nav_pilot import ProportionalNavigationPilot
+from pilots.proportional_nav_pilot import PlanarProportionalNavPilot
 from models.missile import PhysicalMissleModel
 import models.physics as physics
 import numpy as np
@@ -15,7 +15,7 @@ if __name__ == "__main__":
     interceptor = PhysicalMissleModel(velocity=np.array([0.0, 0.0, physics.mach_to_ms(5.0)]), max_acc=100 * 9.81, pos=np.array([0.0, 0.0, 100.0]))
 
     env = MissileEnv(settings=settings, target=target, interceptor=interceptor, visualizer=visualizer)
-    agent = ProportionalNavigationPilot(speed=interceptor.max_speed, n=5.0)
+    agent = PlanarProportionalNavPilot(speed=interceptor.max_speed, n=5.0)
 
     done = False
     obs = env.reset()

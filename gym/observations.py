@@ -7,7 +7,7 @@ class InterceptorObservations:
     Observation space for a missile aiming for a target in the simulation environment.
     """
     # seeker observations
-    distance_vec: np.ndarray                        # distance to target (relative to initial distance)
+    los_distance_vec: np.ndarray                    # distance to target (or relative position)
     closing_rate_vec: np.ndarray                    # closing rate (relative to max speed)
     los_angles_vec: np.ndarray                      # line-of-sight angles (from radians to [-1, 1])
     los_angle_rates_vec: np.ndarray                 # line-of-sight angle rates (from radians to [-1, 1])
@@ -28,7 +28,7 @@ class InterceptorObservations:
             np.ndarray: The packed observations.
         """
         return np.concatenate([
-            self.distance_vec,
+            self.los_distance_vec,
             self.closing_rate_vec,
             self.los_angles_vec,
             self.los_angle_rates_vec,
@@ -40,7 +40,7 @@ class InterceptorObservations:
         """
         Unpack the packed observations into the individual components.
         """
-        self.distance_vec = packed_observations[0:3]
+        self.los_distance_vec = packed_observations[0:3]
         self.closing_rate_vec = packed_observations[3:6]
         self.los_angles_vec = packed_observations[6:8]
         self.los_angle_rates_vec = packed_observations[8:10]

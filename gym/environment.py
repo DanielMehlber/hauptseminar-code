@@ -219,12 +219,11 @@ class MissileEnv(gym.Env):
 
         # interceptor turn rate in missile space (e.g. by gyroscopes)
         missile_space_turn_angles_vec = np.array([missile_space_yaw_angle, missile_space_pitch_angle])
-        norm_missile_space_turn_angles_vec = missile_space_turn_angles_vec / np.pi # normalize to [-1, 1]
-        missile_space_turn_rate_vec = norm_missile_space_turn_angles_vec / dt
+        missile_space_turn_rate_vec = missile_space_turn_angles_vec / dt
         
         # create the observation object
         observations = InterceptorObservations()
-        observations.distance_vec = missile_space_distance_vec
+        observations.los_distance_vec = missile_space_distance_vec
         observations.closing_rate_vec = missile_space_closing_rate_vec
         observations.los_angles_vec = missile_space_los_angles_vec
         observations.los_angle_rates_vec = missile_space_los_angles_rate_vec
@@ -247,10 +246,11 @@ class MissileEnv(gym.Env):
         max_speed = self.interceptor.max_speed + self.target.max_speed
 
         # TODO: think of better ways to normalize these values
-        observations.distance_vec /= start_distance                  # relative to initial distance
+        observations.los_distance_vec /= start_distance                  # relative to initial distance
         observations.closing_rate_vec /= max_speed                   # relative to max speed
         observations.los_angles_vec /= np.pi                         # converted to interval [-1, 1] 
         observations.los_angle_rates_vec /= np.pi                    # converted to interval [-1, 1]
+        observations.missile_space_turn_rate /= np.pi                      # converted to interval [-1, 1]
 
         return observations
 
@@ -263,7 +263,7 @@ class MissileEnv(gym.Env):
         efficiency is not a goal anymore.
         """
         # We want to exponentially reward lower distances
-        distance = np.linalg.norm(obs.distance_vec)
+        distance = np.linalg.norm(obs.los_distance_vec)
         relative_distance = distance / terminal_distance # relative to terminal distance [0, 1]
         # distance_reward = math.pow((1.0 - relative_distance) + 1.0, 2) - 1.0 # quadratic reward for distance
         distance_reward = math.pow(3, (1.0 - relative_distance)) - 1.0 # exponential reward for distance [0, 2]
@@ -307,12 +307,12 @@ class MissileEnv(gym.Env):
         """
         # The less the distance, the higher the reward
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec)
-        dist = np.linalg.norm(obs.distance_vec)
+        dist = np.linalg.norm(obs.los_distance_vec)
         dist_reward = -dist / start_distance
 
         # We want to reward the interceptor for closing in on the target
         previous_distance = np.linalg.norm(self.missile_space_last_los_vec)
-        current_distance = np.linalg.norm(obs.distance_vec)
+        current_distance = np.linalg.norm(obs.los_distance_vec)
         closing_rate_reward = (previous_distance - current_distance) / dt # positive if closing in on target
         closing_rate_reward /= np.linalg.norm(self.interceptor.get_velocity()) # relative to max speed
 
@@ -364,7 +364,7 @@ class MissileEnv(gym.Env):
         # to the velocity of the interceptor. As estimate, we take the distance the interceptor
         # travels over a short durtation of time (e.g. 2 seconds).
         terminal_distance = self.interceptor.max_speed * 3 # distance = speed * time (1s)
-        if np.linalg.norm(obs.distance_vec) > terminal_distance:
+        if np.linalg.norm(obs.los_distance_vec) > terminal_distance:
             return self._get_midcourse_reward(obs, action, status, dt)
         else:
             return self._get_terminal_phase_reward(obs, action, status, terminal_distance, dt)

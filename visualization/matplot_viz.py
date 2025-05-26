@@ -104,9 +104,9 @@ class MatplotVisualizer(AbstractVisualizer):
             ax.set_ylim(y_limits)
             ax.set_zlim(z_limits)
 
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Altitude')
+        ax.set_xlabel('X (m)')
+        ax.set_ylabel('Y (m)')
+        ax.set_zlabel('Altitude (m)')
         ax.set_title(f'Episode Visualization at Time: {time:.2f}s')
 
         # Fix duplicate legends

@@ -1,5 +1,6 @@
 import numpy as np
-from gym.observations import InterceptorObservations 
+from environment.observations import InterceptorObservations 
+from models.missile import PhysicalMissleModel
 import models.physics as physics
 
 class PlanarProportionalNavPilot:
@@ -75,8 +76,10 @@ class PlanarProportionalNavPilot:
         lateral_acc_command_vec = physics.project_on_plane(los_acc_command_vec, missile_space_velocity_vec)
 
         # normalize the acceleration command to the max acceleration
+        acc_command_maginude = np.linalg.norm(lateral_acc_command_vec)
+        if acc_command_maginude > self.max_acc:
+            lateral_acc_command_vec *= self.max_acc / acc_command_maginude
         norm_lateral_acc_command = lateral_acc_command_vec / self.max_acc
-        norm_lateral_acc_command = np.clip(norm_lateral_acc_command, -1, 1)
 
         # drop the x component (acceleration in the direction of the velocity vector)
         return np.array([norm_lateral_acc_command[1], norm_lateral_acc_command[2]])
@@ -93,14 +96,147 @@ class PlanarProportionalNavPilot:
         return norm_distance, norm_closing_rate, norm_los_angle, norm_los_angle_rate, world_space_interceptor_orientation, missile_space_turn_rate
         
         
-
 class ZemProportionalNavPilot:
     def __init__(self, max_acc: float, n: float):
         self.n = n
         self.max_acc = max_acc # max acceleration in m/s^2
-        self.last_target_relative_pos_vec = None
 
-    def step(self, observations: np.ndarray, dt: float) -> np.ndarray:
+        # to calculate the target relative velocity vector form outside observations
+        self.world_space_last_target_pos = None
+        self.world_space_last_interceptor_pos = None
+
+        # to calculate the target relative velocity vector from missile observations
+        self.missile_space_last_target_position = None
+
+    def _get_target_velocity_from_outside_measurements(self, interceptor: PhysicalMissleModel, target: PhysicalMissleModel, dt: float):
+        """
+        Get the target velocity vector (in the missile's frame of reference) by looking at outside measurements from a ground station.
+        This calculation uses world position coordinates of the target to calculate its velocity and then transforms it into the
+        interceptor's frame of reference.
+        """
+        assert dt > 1e-6, "delta time is too small for stable calculations"
+
+        # get interceptor world velocity because we need relative velocity
+        world_space_interceptor_vel_vec = np.zeros(3)
+        if self.world_space_last_interceptor_pos is not None:
+            # differntiate them to get velocity
+            world_space_interceptor_vel_vec = (interceptor.world_pos - self.world_space_last_interceptor_pos) / dt
+        
+        missile_space_target_relative_vel_vec= np.zeros(3)
+        if self.world_space_last_target_pos is not None:
+            # differntiate them to get velocity
+            world_space_target_velocity_vec = (target.world_pos - self.world_space_last_target_pos) / dt
+
+            # make relative to interceptor velocity
+            world_space_relative_target_velocity_vec = world_space_target_velocity_vec - world_space_interceptor_vel_vec
+
+            # transform into missile space
+            missile_space_target_relative_vel_vec = interceptor.body_to_world_rot_mat.T @ world_space_relative_target_velocity_vec
+     
+        assert np.all(np.isfinite(missile_space_target_relative_vel_vec)), "velocity overflow encountered"
+
+        # store for the next time step
+        self.world_space_last_target_pos = target.world_pos.copy()
+        self.world_space_last_interceptor_pos = interceptor.world_pos.copy()
+
+        return missile_space_target_relative_vel_vec
+
+    def _get_target_velocity_from_missile_observations(self, observations: InterceptorObservations, dt: float):
+        """
+        Get the target velocity vector (in the missile's frame of reference) by taking observations of the seeker and compensate
+        for disturbances by the intereptor itself, e.g. its own turn rate. This is more complex than using outside measurements, but 
+        necessary if outside measurements are not given.
+        """
+        assert dt > 1e-6, "delta time is too small for stable calculations"
+
+        missile_space_target_velocity_vec = np.zeros(3)
+        if self.missile_space_last_target_position is not None:
+            # build a rotation matrix that undoes the missile's last turn
+            missile_space_turn_angles = observations.missile_space_turn_rate * dt
+            missile_space_yaw_angle, missile_space_pitch_angle = missile_space_turn_angles[0], missile_space_turn_angles[1]
+            undo_turn_rot_matrix = physics.rotate_z_matrix(-missile_space_yaw_angle) @ physics.rotate_y_matrix(-missile_space_pitch_angle)
+
+            # cancel own rotation from the target position vector
+            missile_space_last_target_adjusted_pos_vec = undo_turn_rot_matrix @ self.missile_space_last_target_position
+            missile_space_target_velocity_vec = (observations.los_distance_vec - missile_space_last_target_adjusted_pos_vec) / dt
+
+        self.missile_space_last_target_position = observations.los_distance_vec.copy()
+        return missile_space_target_velocity_vec
+
+    def _normalize_command(self, lateral_acc_command_vec: np.ndarray) -> np.ndarray:
+        lateral_acc_command_magnitude = np.linalg.norm(lateral_acc_command_vec)
+        if lateral_acc_command_magnitude > self.max_acc:
+            lateral_acc_command_vec *= self.max_acc / lateral_acc_command_magnitude
+        norm_lateral_acc_command = lateral_acc_command_vec / self.max_acc
+
+        return norm_lateral_acc_command
+
+    def _using_world_coordinates(self, observations: InterceptorObservations, dt: float, interceptor: PhysicalMissleModel, target: PhysicalMissleModel) -> np.ndarray:
+        world_target_velocity = target.get_velocity()
+        world_interceptor_velocity = interceptor.get_velocity()
+
+        # relative to interceptor
+        world_relative_target_velocity = world_target_velocity - world_interceptor_velocity
+        world_relative_target_position = target.world_pos - interceptor.world_pos
+
+        # calcute zero-effort miss
+        distance = np.linalg.norm(world_relative_target_position)
+        closing_velocity = -np.dot(world_relative_target_position, world_relative_target_velocity) / distance
+        time_to_go = distance / closing_velocity
+        zero_effort_miss_vec = world_relative_target_position + world_relative_target_velocity * time_to_go
+
+
+        # make zero-effort-miss perpendicular to line-of-sight vector
+        los_vector = world_relative_target_position / np.linalg.norm(world_relative_target_position)
+        zem_los_parallel_vec = np.dot(los_vector, zero_effort_miss_vec)
+        zem_los_perpendicular_vec = zero_effort_miss_vec - zem_los_parallel_vec
+
+        # crate acceleration command and project onto missile's lateral plane
+        world_acc_command = self.n * zem_los_perpendicular_vec / (time_to_go**2)
+        world_interceptor_longitude_vec = world_interceptor_velocity / np.linalg.norm(world_interceptor_velocity)
+        world_lateral_acc_command = physics.project_on_plane(world_acc_command, world_interceptor_longitude_vec)
+
+        # rotate into missile's frame of reference
+        missile_space_lateral_acc_command = interceptor.body_to_world_rot_mat.T @ world_lateral_acc_command
+        norm_missile_space_lateral_acc_command = self._normalize_command(missile_space_lateral_acc_command)
+        return norm_missile_space_lateral_acc_command
+    
+    def _using_missile_observations(self, observations: InterceptorObservations, dt: float, interceptor: PhysicalMissleModel, target: PhysicalMissleModel) -> np.ndarray:
+        los_unit_vec = observations.los_distance_vec / np.linalg.norm(observations.los_distance_vec)
+        
+        # the zem vector is basically the predicted intercept point of the missile and target
+        distance_to_target = np.linalg.norm(observations.los_distance_vec)
+        closing_rate_to_target = np.dot(observations.closing_rate_vec, los_unit_vec)
+        time_to_go = distance_to_target / closing_rate_to_target
+
+        if abs(time_to_go) < 1e-6 or not np.isfinite(time_to_go):
+            print("time to go is not finite or too small")
+            return np.zeros(2), None # continue course
+
+        # we need target velocity to infer the predicted intercept point
+        missile_space_target_relative_vel_ve = self._get_target_velocity_from_outside_measurements(interceptor, target, dt)
+        # missile_space_target_velocity_vec = self._get_target_velocity_from_missile_observations(observations, dt)
+        missile_space_zem_vec = observations.los_distance_vec + missile_space_target_relative_vel_ve * time_to_go
+        
+        # get the component which is perpendicular to the line of sight vector
+        missile_space_zem_los_parallel_magnitude = np.dot(missile_space_zem_vec, los_unit_vec)
+        missile_space_zem_los_perpendicular_vec = missile_space_zem_vec - (missile_space_zem_los_parallel_magnitude * los_unit_vec)
+
+        # perpendicular to the line of sight vector
+        # missile_space_acc_command_vec = self.n * missile_space_zem_los_perpendicular_vec * 1 / time_to_go**2
+        missile_space_acc_command_vec = self.n * missile_space_zem_vec * (1 / time_to_go**2)
+
+        # project the acceleration command onto the lateral plane of the interceptor (perpendicular to the velocity vector)
+        lateral_acc_command_vec = physics.project_on_plane(missile_space_acc_command_vec, np.array([1.0, 0.0, 0.0]))
+
+        # limit the acceleration command and normalize it
+        norm_lateral_acc_command = self._normalize_command(lateral_acc_command_vec)
+
+        # drop the x component (acceleration in the direction of the velocity vector)
+        return np.array([norm_lateral_acc_command[1], norm_lateral_acc_command[2]])
+
+
+    def step(self, observations: np.ndarray, dt: float, interceptor: PhysicalMissleModel, target: PhysicalMissleModel) -> np.ndarray:
         """
         Calculate the acceleration command based on the observations and time step.
         
@@ -112,50 +248,9 @@ class ZemProportionalNavPilot:
             np.ndarray: The acceleration command for the interceptor.
         """
         observations: InterceptorObservations = InterceptorObservations(observations)
-        los_unit_vec = observations.los_distance_vec / np.linalg.norm(observations.los_distance_vec)
-
-        # to find target relative velocity, compensate for the interceptor's own turn rate
-        self_turn_angles = observations.missile_space_turn_rate * dt
-        self_turn_yaw_angle, self_turn_pitch_angle = self_turn_angles[0], self_turn_angles[1]
-        self_turn_rot_matrix = physics.rotate_z_matrix(-self_turn_yaw_angle) @ physics.rotate_y_matrix(-self_turn_pitch_angle)
-        target_relative_position_vec = self_turn_rot_matrix @ observations.los_distance_vec
-
-        # we need the target velocity vector relative to the interceptor
-        target_velocity_vec = np.zeros(3)
-        if self.last_target_relative_pos_vec is None:
-            self.last_target_relative_pos_vec = target_relative_position_vec
-        else:
-            target_velocity_vec = (target_relative_position_vec - self.last_target_relative_pos_vec) / dt
-            self.last_target_relative_pos_vec = target_relative_position_vec
-
-        # the zem vector is basically the predicted intercept point of the missile and target
-        distance_to_target = np.linalg.norm(observations.los_distance_vec)
-        closing_rate_to_target = np.dot(observations.closing_rate_vec, los_unit_vec)
-        time_to_go = distance_to_target / closing_rate_to_target
-
-        if abs(time_to_go) < 1e-6 or not np.isfinite(time_to_go):
-            return np.zeros(2) # continue course
-
-        zem_vec = observations.los_distance_vec + target_velocity_vec * time_to_go
+        command = self._using_missile_observations(observations, dt, interceptor, target)
+        return command
         
-        # get the component which is perpendicular to the line of sight vector
-        zem_los_parallel_magnitude = np.dot(zem_vec, los_unit_vec)
-        zem_los_perpendicular_vec = zem_vec - (zem_los_parallel_magnitude * los_unit_vec)
-
-        # perpendicular to the line of sight vector
-        acc_command_vec = self.n * zem_los_perpendicular_vec * 1 / time_to_go**2
-
-        # project the acceleration command onto the lateral plane of the interceptor (perpendicular to the velocity vector)
-        lateral_acc_command_vec = physics.project_on_plane(acc_command_vec, np.array([1.0, 0.0, 0.0]))
-
-        # normalize the acceleration command to the max acceleration
-        norm_lateral_acc_command = lateral_acc_command_vec / self.max_acc
-        norm_lateral_acc_command = np.clip(norm_lateral_acc_command, -1, 1)
-
-        print (f"acc_command_vec: {norm_lateral_acc_command}")
-
-        # drop the x component (acceleration in the direction of the velocity vector)
-        return np.array([norm_lateral_acc_command[1], norm_lateral_acc_command[2]])
     
     def _get_observations(self, observations: np.ndarray) -> tuple:        
         norm_distance = observations[0:3]
@@ -169,13 +264,12 @@ class ZemProportionalNavPilot:
         
         
 class SpaceProportionalNavPilot:
-    def __init__(self, max_acc: float, max_speed: float, n: float):
+    def __init__(self, max_acc: float, n: float):
         self.n = n
-        self.max_speed = max_speed # required to convert norm closing rate to closing rate in m/s
         self.max_acc = max_acc # max acceleration in m/s^2
         pass
 
-    def step(self, observations: np.ndarray, dt: float) -> np.ndarray:
+    def step(self, observations: np.ndarray, dt: float, interceptor: PhysicalMissleModel, target: PhysicalMissleModel) -> np.ndarray:
         """
         Calculate the acceleration command based on the observations and time step.
         

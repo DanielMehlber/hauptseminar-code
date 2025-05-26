@@ -1,5 +1,5 @@
-from gym.environment import MissileEnv, MissileEnvSettings
-import gym.visualisation.interactive as viz
+from environment.environment import MissileEnv, MissileEnvSettings
+import environment.visualisation.interactive as viz
 from pilots.proportional_nav_pilot import PlanarProportionalNavPilot
 from models.missile import PhysicalMissleModel
 import models.physics as physics

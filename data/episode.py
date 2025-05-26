@@ -8,25 +8,28 @@ class TargetState(Interpolatable):
     velocity: np.ndarray
 
     def interpolate(self, other: 'TargetState', alpha: float) -> 'TargetState':
-        interpolated_position = interpolate_float(self.position, other.position, alpha)
-        interpolated_velocity = interpolate_float(self.velocity, other.velocity, alpha)
+        interpolated_position = interpolate_value(self.position, other.position, alpha)
+        interpolated_velocity = interpolate_value(self.velocity, other.velocity, alpha)
         return TargetState(interpolated_position, interpolated_velocity)
 
 @dataclass
 class InterceptorState(Interpolatable):
-    position: np.ndarray    # current position of the interceptor
-    velocity: np.ndarray    # current velocity of the interceptor
-    command: np.ndarray     # last issued acceleration command
-    los_angle: np.ndarray   # line of sight angle to the target
-    distance: float         # distance to the target
+    position: np.ndarray                    # current position of the interceptor
+    velocity: np.ndarray                    # current velocity of the interceptor
+    command: np.ndarray                     # last issued acceleration command
+    los_angle: np.ndarray                   # line of sight angle to the target
+    distance: float                         # distance to the 
+    predicted_intercept_point: np.ndarray   # predicted intercept point (optional)
 
     def interpolate(self, other: 'InterceptorState', alpha: float) -> 'InterceptorState':
-        interpolated_position = interpolate_float(self.position, other.position, alpha)
-        interpolated_velocity = interpolate_float(self.velocity, other.velocity, alpha)
-        interpolated_command = interpolate_float(self.command, other.command, alpha)
-        interpolated_los_angle = interpolate_float(self.los_angle, other.los_angle, alpha)
-        interpolated_distance = interpolate_float(self.distance, other.distance, alpha)
-        return InterceptorState(interpolated_position, interpolated_velocity, interpolated_command, interpolated_los_angle, interpolated_distance)
+        interpolated_position = interpolate_value(self.position, other.position, alpha)
+        interpolated_velocity = interpolate_value(self.velocity, other.velocity, alpha)
+        interpolated_command = interpolate_value(self.command, other.command, alpha)
+        interpolated_los_angle = interpolate_value(self.los_angle, other.los_angle, alpha)
+        interpolated_distance = interpolate_value(self.distance, other.distance, alpha)
+        interpolated_pip = interpolate_value(self.predicted_intercept_point, other.predicted_intercept_point, alpha)
+        return InterceptorState(interpolated_position, interpolated_velocity, interpolated_command, 
+                                interpolated_los_angle, interpolated_distance, interpolated_pip)
 
 @dataclass
 class Interceptor:

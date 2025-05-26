@@ -7,7 +7,7 @@ import data.episode as ep
 import time
 from models.missile import PhysicalMissleModel
 from pilots.pilot import Pilot
-from gym.observations import InterceptorObservations
+from environment.observations import InterceptorObservations
 import math
 
 @dataclass
@@ -43,7 +43,7 @@ class MissileEnv(gym.Env):
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         # required as anchor point to normalize distance measurements
-        self.missile_space_start_distance_vec = self.interceptor.orientation_matrix.T @ (self.target.pos - self.interceptor.pos)
+        self.missile_space_start_distance_vec = self.interceptor.body_to_world_rot_mat.T @ (self.target.world_pos - self.interceptor.world_pos)
 
         # required to calculate observations (which as basically changes in position and velocity)
         self.missile_space_last_los_vec: np.ndarray = None # required to calculate closing rate
@@ -77,11 +77,11 @@ class MissileEnv(gym.Env):
 
     def _line_of_sight_angle(self):
         # Calculate the angle between the interceptor and target positions
-        world_space_los_vector = self.target.pos - self.interceptor.pos
+        world_space_los_vector = self.target.world_pos - self.interceptor.world_pos
         
         # transform to interceptor space: we want to calculate the LOS angle 
         # from the interceptor's perspective
-        missile_reference = self.interceptor.orientation_matrix.T
+        missile_reference = self.interceptor.body_to_world_rot_mat.T
         missile_space_los_vector = missile_reference @ world_space_los_vector
         missile_space_los_vector /= np.linalg.norm(missile_space_los_vector)
 
@@ -102,8 +102,8 @@ class MissileEnv(gym.Env):
 
     def _update_sensor_data(self):
         # required for delta-distance in observations (closing rate)
-        world_space_los_vec = self.target.pos - self.interceptor.pos # in world space, but we need it from missile's pov
-        self.missile_space_last_los_vec = self.interceptor.orientation_matrix.T @ world_space_los_vec
+        world_space_los_vec = self.target.world_pos - self.interceptor.world_pos # in world space, but we need it from missile's pov
+        self.missile_space_last_los_vec = self.interceptor.body_to_world_rot_mat.T @ world_space_los_vec
 
         # required for turning rate of interceptor
         world_space_interceptor_velocity = self.interceptor.get_velocity()
@@ -115,15 +115,16 @@ class MissileEnv(gym.Env):
     def _update_episode_data(self):
         # Update the episode data with the current state of the interceptor and target
         interceptor_state = ep.InterceptorState(
-            position=self.interceptor.pos.copy(),
+            position=self.interceptor.world_pos.copy(),
             velocity=self.interceptor.get_velocity().copy(),
             command=self.last_acc_command.copy(),
             los_angle=self.missile_space_last_los_angle.copy(),
-            distance=np.linalg.norm(self.interceptor.pos - self.target.pos), # distance to target in missile space
+            distance=np.linalg.norm(self.interceptor.world_pos - self.target.world_pos), # distance to target in missile space
+            predicted_intercept_point=None # can be set with other means
         )
 
         target_state = ep.TargetState(
-            position=self.target.pos.copy(),
+            position=self.target.world_pos.copy(),
             velocity=self.target.get_velocity().copy()
         )
 
@@ -168,7 +169,7 @@ class MissileEnv(gym.Env):
 
         # Update values for visualization
         self.last_acc_command = action.copy()
-        self.last_missile_orientation_matrix = self.interceptor.orientation_matrix.copy()
+        self.last_missile_orientation_matrix = self.interceptor.body_to_world_rot_mat.copy()
 
         # depending on rl agent or pilot, we can either normalize the observation space or not
         obs = None
@@ -179,12 +180,12 @@ class MissileEnv(gym.Env):
 
         status = self._check_status()
         done = self._check_done(status)
-        reward = self._get_reward(self.get_interceptor_observations(dt), action, status, dt)
+        reward, info = self._get_reward(self.get_interceptor_observations(dt), action, status, dt)
         
         # Update after reward calculation because it needs the last sensor data
         self._update_episode_data()
 
-        return obs.pack(), reward, done, False, {}
+        return obs.pack(), reward, done, False, info
 
     def render(self):
         pass
@@ -196,7 +197,7 @@ class MissileEnv(gym.Env):
         """
 
         # line-of-sight from interceptor to target (from seeker's point of view) - length is distance to target
-        missile_space_los_vec = self.interceptor.orientation_matrix.T @ (self.target.pos - self.interceptor.pos) # target position in missile space
+        missile_space_los_vec = self.interceptor.body_to_world_rot_mat.T @ (self.target.world_pos - self.interceptor.world_pos) # target position in missile space
 
         # distance and closing rate to the target (from seekers point of view)
         missile_space_distance_before_vec = np.abs(self.missile_space_last_los_vec) # we care about component-wise distance to target
@@ -212,7 +213,7 @@ class MissileEnv(gym.Env):
         world_space_interceptor_orientation_vec = world_space_interceptor_velocity_vec / np.linalg.norm(world_space_interceptor_velocity_vec)
         
         # interceptor turn angles in missile space (e.g. by gyroscopes)
-        missile_space_last_interceptor_orientation_vec = self.interceptor.orientation_matrix.T @ self.world_space_last_interceptor_orientation
+        missile_space_last_interceptor_orientation_vec = self.interceptor.body_to_world_rot_mat.T @ self.world_space_last_interceptor_orientation
         missile_space_yaw_angle, missile_space_pitch_angle = self.interceptor.calculate_local_angles_to(missile_space_last_interceptor_orientation_vec)
         missile_space_pitch_angle *= -1.0 # invert pitch angle to match the interceptor's coordinate system
         missile_space_yaw_angle *= -1.0 # invert yaw angle to match the interceptor's coordinate system
@@ -233,6 +234,18 @@ class MissileEnv(gym.Env):
         # pack all observations into a single vector
         return observations
     
+    def set_current_predicted_intercept_point(self, interceptor: str, point: np.ndarray):
+        """
+        Sets predicted intercept point for a specific interceptor at the current time of simulation.
+        """
+        # get states over time of interceptor
+        series = self.current_episode.get_interceptor(interceptor).states
+        state = series.get(self.sim_time)
+
+        # update of insert state with intercept point
+        state.predicted_intercept_point = point.copy()
+        series.add(self.sim_time, state)
+
     def _get_norm_observations(self, dt: float) -> InterceptorObservations:
         """
         Returns the normalized observations for the interceptor. This includes data from
@@ -293,9 +306,17 @@ class MissileEnv(gym.Env):
         action_punishment *= 0.5
         event_reward *= 5.0
 
+        info = {}
+        info["dist-reward"] = distance_reward
+        info["closing-rate-reward"] = closing_reward
+        info["event-reward"] = event_reward
+        info["action-punishment"] = action_punishment
+        info["ground-penality"] = 0.0
+
         terminal_reward = distance_reward + closing_reward + action_punishment + event_reward
-        # print(f"Terminal Reward {terminal_reward:.2f} = Distance {distance_reward:.2f} + Closing {closing_reward:.2f} + Action {action_punishment:.2f} + Event {event_reward:.2f}")
-        return terminal_reward
+        info["reward"] = terminal_reward
+
+        return terminal_reward, info
 
     def _get_midcourse_reward(self, obs: InterceptorObservations, 
                               action: np.ndarray, 
@@ -308,7 +329,7 @@ class MissileEnv(gym.Env):
         # The less the distance, the higher the reward
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec)
         dist = np.linalg.norm(obs.los_distance_vec)
-        dist_reward = -dist / start_distance
+        dist_reward = (start_distance - dist) / start_distance # relative to initial distance
 
         # We want to reward the interceptor for closing in on the target
         previous_distance = np.linalg.norm(self.missile_space_last_los_vec)
@@ -327,29 +348,39 @@ class MissileEnv(gym.Env):
             
         
         # We want to keep the interceptor energy efficient (less commands = better)
-        action_punishment = -np.linalg.norm(action)
+        # small acceleration commands are better than large ones
+        action_punishment = -(np.linalg.norm(action) ** 2)
 
         # We want the interceptor to avoid the ground (z < 0)
-        interceptor_altidude = self.interceptor.pos[2]
+        interceptor_altidude = self.interceptor.world_pos[2]
         safe_altitude = 1000
 
         # Exponential penalty for altitude below safe level
-        ground_penalty = -np.exp(-interceptor_altidude / safe_altitude) if status != "crashed" else -1.0
+        ground_penalty = -min(interceptor_altidude / safe_altitude, 1.0)**2 if status != "crashed" else -1.0
 
         # Weighting the rewards
-        dist_reward *= 5.0
-        closing_rate_reward *= 3.0
-        event_reward *= 10.0
+        dist_reward *= 8.0
+        closing_rate_reward *= 10.0
+        event_reward *= 5.0
         action_punishment *= 5.0
-        ground_penalty *= 10.0 
+        ground_penalty *= 4.0
+
+        info = {}
+        info["dist-reward"] = dist_reward
+        info["closing-rate-reward"] = closing_rate_reward
+        info["event-reward"] = event_reward
+        info["action-punishment"] = action_punishment
+        info["ground-penality"] = ground_penalty
 
         # Combine all rewards
         reward = dist_reward + closing_rate_reward + event_reward + action_punishment + ground_penalty
-        return reward
+        info["reward"] = reward
+
+        return reward, info
 
     def _get_reward(self, obs: InterceptorObservations, 
                     action: np.ndarray, 
-                    status: str, dt: float):
+                    status: str, dt: float) -> tuple[float, dict]:
         """
         We need different rewards for the interceptor's phases: 
         1) The midcourse phase focues on bringing it in a close vicinity to the target in an e
@@ -373,10 +404,10 @@ class MissileEnv(gym.Env):
         return status != "ongoing"
     
     def _check_status(self):
-        if self.interceptor.pos[2] < 0:
+        if self.interceptor.world_pos[2] < 0:
             print ("Interceptor crashed into the ground")
             return "crashed"
-        elif np.linalg.norm(self.interceptor.pos - self.target.pos) < 50:
+        elif np.linalg.norm(self.interceptor.world_pos - self.target.world_pos) < 50:
             print ("Interceptor hit the target")
             return "hit"
         elif self.sim_time > self.settings.time_limit:

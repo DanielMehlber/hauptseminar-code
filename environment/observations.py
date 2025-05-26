@@ -8,7 +8,7 @@ class InterceptorObservations:
     """
     # seeker observations
     los_distance_vec: np.ndarray                    # distance to target (or relative position)
-    closing_rate_vec: np.ndarray                    # closing rate (relative to max speed)
+    closing_rate_vec: np.ndarray                    # closing rate
     los_angles_vec: np.ndarray                      # line-of-sight angles (from radians to [-1, 1])
     los_angle_rates_vec: np.ndarray                 # line-of-sight angle rates (from radians to [-1, 1])
     

@@ -18,8 +18,8 @@ class PhysicalMissleModel:
             pos (np.ndarray): The initial position of the missile in m.
         """
         # required for resetting the missile to its initial state
-        self.init_pos = pos.copy()
-        self.init_velocity = velocity.copy()
+        self.world_init_pos = pos.copy()
+        self.world_init_velocity = velocity.copy()
         self.max_speed = np.linalg.norm(velocity)
 
         # limits
@@ -27,15 +27,15 @@ class PhysicalMissleModel:
         self.max_axes_acc = math.sqrt(self.max_lat_acc**2 / 2.0)
         
         # represents orientation of missile in 3D space
-        self.orientation_matrix: np.ndarray = None
+        self.body_to_world_rot_mat: np.ndarray = None
 
         self.reset()
 
     def reset(self):
-        self.pos = self.init_pos.copy()
+        self.world_pos = self.world_init_pos.copy()
         self.steps = 0  
 
-        self._init_orientation_matrix(self.init_velocity)
+        self._init_orientation_matrix(self.world_init_velocity)
 
     def _build_orthonormal_body_frame(self, velocity_vec):
         """
@@ -48,6 +48,11 @@ class PhysicalMissleModel:
         The basis is built using the Gram-Schmidt process to ensure orthogonality.
         The basis is returned as three orthonormal vectors: longitude_axis, right_axis, up_axis.
         """
+
+        # return default orientation if velocity = 0
+        if np.linalg.norm(velocity_vec) < 1e-6:
+            return np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0])
+
         longitude_axis = velocity_vec / np.linalg.norm(velocity_vec)
         right_axis = np.zeros(3)
         up_axis = np.zeros(3)
@@ -87,7 +92,7 @@ class PhysicalMissleModel:
     def _init_orientation_matrix(self, velocity_vec):
         # Rebuild the orientation matrix based on the current velocity vector
         longitude_axis, right_axis, up_axis = self._build_orthonormal_body_frame(velocity_vec)
-        self.orientation_matrix = self._build_orientation_matrix(longitude_axis, right_axis, up_axis)
+        self.body_to_world_rot_mat = self._build_orientation_matrix(longitude_axis, right_axis, up_axis)
 
     def calculate_local_angles_to(self, missile_space_vector: np.ndarray) -> np.ndarray:
         """
@@ -141,6 +146,10 @@ class PhysicalMissleModel:
 
         TODO: There might be a more efficient way to do this, but this is a good start.
         """
+
+        if self.max_speed < 1e-6:
+            return
+
         missile_space_roll_axis = np.array([1.0, 0.0, 0.0]) # x is forward (roll axis)
         missile_space_velocity_vec = missile_space_roll_axis * self.max_speed
 
@@ -165,20 +174,20 @@ class PhysicalMissleModel:
         missile_space_new_pitch_axis /= np.linalg.norm(missile_space_new_pitch_axis)
 
         # transform new axes into world space
-        world_new_roll_axis = self.orientation_matrix @ missile_space_new_roll_axis
-        world_new_yaw_axis = self.orientation_matrix @ missile_space_new_yaw_axis
-        world_new_pitch_axis = self.orientation_matrix @ missile_space_new_pitch_axis
+        world_new_roll_axis = self.body_to_world_rot_mat @ missile_space_new_roll_axis
+        world_new_yaw_axis = self.body_to_world_rot_mat @ missile_space_new_yaw_axis
+        world_new_pitch_axis = self.body_to_world_rot_mat @ missile_space_new_pitch_axis
 
         # build the new orientation matrix
-        self.orientation_matrix = self._build_orientation_matrix(world_new_roll_axis, world_new_yaw_axis, world_new_pitch_axis)
+        self.body_to_world_rot_mat = self._build_orientation_matrix(world_new_roll_axis, world_new_yaw_axis, world_new_pitch_axis)
 
         # update world position of missile
         world_space_new_velocity_vec = self.get_velocity()
-        self.pos += world_space_new_velocity_vec * dt
+        self.world_pos += world_space_new_velocity_vec * dt
 
         # assert that no components are NaN or Inf
-        assert np.any(np.isfinite(self.pos)), "Position contains NaN or Inf values."
-        assert np.any(np.isfinite(self.orientation_matrix)), "Orientation matrix contains NaN or Inf values."
+        assert np.any(np.isfinite(self.world_pos)), "Position contains NaN or Inf values."
+        assert np.any(np.isfinite(self.body_to_world_rot_mat)), "Orientation matrix contains NaN or Inf values."
         assert np.any(np.isfinite(self.max_speed)), "Speed contains NaN or Inf values."
 
     def _clamp_accleration(self, lat_acc: np.ndarray) -> np.ndarray:
@@ -209,4 +218,4 @@ class PhysicalMissleModel:
         Returns:
             np.ndarray: The current velocity vector of the missile in m/s.
         """
-        return self.orientation_matrix @ np.array([self.max_speed, 0.0, 0.0])
+        return self.body_to_world_rot_mat @ np.array([self.max_speed, 0.0, 0.0])

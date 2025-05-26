@@ -1,7 +1,7 @@
 import abc
 from typing import Generic, TypeVar
 
-def interpolate_float(first: float, second: float, alpha: float) -> float:
+def interpolate_value(first: any, second: any, alpha: float) -> float:
     """
     Interpolate between two floats.
     
@@ -13,6 +13,12 @@ def interpolate_float(first: float, second: float, alpha: float) -> float:
     Returns:
         float: The interpolated float.
     """
+    if first is None:
+        return None
+    
+    if second is None:
+        return first
+
     return (1 - alpha) * first + alpha * second
 
 class Interpolatable(abc.ABC):

@@ -8,41 +8,70 @@ from visualization.abstract_viz import AbstractVisualizer
 
 
 class MatplotVisualizer(AbstractVisualizer):
-    def __init__(self, data: ep.Episode = None):
-        self.data: ep.Episode = data
+    def __init__(self, episode: ep.Episode = None):
+        self.episodes: ep.Episode = episode
         self.limits = None
 
-        self.last_episode_count = 0 # used to optimize limit computation of plot
+        self.must_recompute_limits = False # used to optimize limit computation of plot
 
-        if self.data is not None:
+        self.episodes = []
+
+        if episode is not None:
+            self.episodes.append(episode)
             self._compute_limits()
 
     def reset(self):
-        self.data = None
-        self.limits = None
-        self.last_episode_count = 0
+        self.episodes = []
+        self._compute_limits()
+        self.must_recompute_limits = True
 
     def set_episode_data(self, data: ep.Episode):
-        self.data = data
+        self.episodes.clear()
+        self.episodes.append(data)
+        self.must_recompute_limits = True
+        self._compute_limits()
+
+    def set_episodes_data(self, data: list[ep.Episode]):
+        self.episodes = data
+        self.must_recompute_limits = True
+        self._compute_limits()
+
+    def add_episode_data(self, data: ep.Episode):
+        self.episodes.append(data)
+        self.must_recompute_limits = True
         self._compute_limits()
 
     def _compute_limits(self):
-        if self.data is None:
+        x_limits = (0, 0)
+        y_limits = (0, 0)
+        z_limits = (0, 0)
+
+        if not self.must_recompute_limits:
+            return self.limits
+
+        for episode in self.episodes:
+            ep_x_limits, ep_y_limits, ep_z_limits = self._compute_episode_limits(episode)
+            x_limits = (min(x_limits[0], ep_x_limits[0]), max(x_limits[1], ep_x_limits[1]))
+            y_limits = (min(y_limits[0], ep_y_limits[0]), max(y_limits[1], ep_y_limits[1]))
+            z_limits = (min(z_limits[0], ep_z_limits[0]), max(z_limits[1], ep_z_limits[1]))
+
+        self.limits = (x_limits, y_limits, z_limits)
+
+    def _compute_episode_limits(self, episode: ep.Episode):
+        if episode is None:
             raise ValueError("No episode data set. Please set the episode data before computing limits.")
 
-        all_states = [s.position for s in self.data.target_states.all.values()]
-        for interceptor in self.data.interceptors.values():
+        all_states = [s.position for s in episode.target_states.all.values()]
+        for interceptor in episode.interceptors.values():
             all_states.extend([s.position for s in interceptor.states.all.values()])
 
         if len(all_states) == 0:
             x_limits = (0, 1)
             y_limits = (0, 1)
             z_limits = (0, 1)
-            self.limits = (x_limits, y_limits, z_limits)
-            return
 
-        if len(all_states) == self.last_episode_count:
-            return
+            return x_limits, y_limits, z_limits
+
 
         all_states = np.array(all_states)
         min_x, max_x = np.min(all_states[:, 0]), np.max(all_states[:, 0])
@@ -62,33 +91,12 @@ class MatplotVisualizer(AbstractVisualizer):
         y_limits = (mid_y - max_range / 2, mid_y + max_range / 2)
         z_limits = (0, max_range)
 
-        self.limits = (x_limits, y_limits, z_limits)
+        return x_limits, y_limits, z_limits
 
+    def _plot(self, time: float, ax: plt.Axes):
 
-    def _plot(self, time: float, ax):
-        target_states = self.data.target_states.get_all_until(time)
-        interceptor_states = {
-            id: interceptor.states.get_all_until(time)
-            for id, interceptor in self.data.interceptors.items()
-        }
-
-        # Plot target
-        if target_states:
-            target_positions = [s.position for _, s in target_states.items()]
-            x, y, z = zip(*target_positions)
-            ax.plot(x, y, z, c='r', label='Target')
-            last = target_states[max(target_states.keys())]
-            ax.scatter(*last.position, c='r', marker='o', s=100)
-
-        # Plot interceptors
-        for id, states in interceptor_states.items():
-            if states:
-                positions = [s.position for _, s in states.items()]
-                current_distance = self.data.interceptors[id].states.get(time).distance
-                x, y, z = zip(*positions)
-                ax.plot(x, y, z, c='b', label=f'{id} ({current_distance:.2f}m)')
-                last = states[max(states.keys())]
-                ax.scatter(*last.position, c='b', marker='o', s=100)
+        for episode in self.episodes:
+            self._plot_episode(episode, time, ax)
 
         if self.limits:
             x_limits, y_limits, z_limits = self.limits
@@ -106,10 +114,55 @@ class MatplotVisualizer(AbstractVisualizer):
         unique = dict(zip(labels, handles))
         ax.legend(unique.values(), unique.keys())
 
+
+    def _plot_episode(self, episode: ep.Episode, time: float, ax: plt.Axes):
+        target_states = episode.target_states.get_all_until(time)
+        interceptor_states = {
+            id: interceptor.states.get_all_until(time)
+            for id, interceptor in episode.interceptors.items()
+        }
+
+        # Plot target
+        if target_states:
+            target_positions = [s.position for _, s in target_states.items()]
+            x, y, z = zip(*target_positions)
+            ax.plot(x, y, z, c='r', label='Target')
+            last = target_states[max(target_states.keys())]
+            ax.scatter(*last.position, c='r', marker='o', s=100)
+            # Draw a dotted line from the point to the ground (z = 0) in the same color
+            ax.plot([last.position[0], last.position[0]], 
+                    [last.position[1], last.position[1]], 
+                    [last.position[2], 0], 
+                    c='r', linestyle='--')
+
+        # Plot interceptors
+        for id, states in interceptor_states.items():
+            if states:
+                final_state = episode.interceptors[id].states.get(time)
+                # trajectory
+                positions = [s.position for _, s in states.items()]
+                current_distance = final_state.distance
+                x, y, z = zip(*positions)
+                ax.plot(x, y, z, c='b', label=f'{id}')
+                last = states[max(states.keys())]
+                ax.scatter(*last.position, c='b', marker='o', s=100)
+                # Draw a dotted line from the point to the ground (z = 0) in the same color
+                ax.plot([last.position[0], last.position[0]], 
+                        [last.position[1], last.position[1]], 
+                        [last.position[2], 0], 
+                        c='b', linestyle='--')
+
+                # predicted intercept point
+                if final_state.predicted_intercept_point is not None:
+                    pip = final_state.predicted_intercept_point
+                    ax.scatter(*pip, c='gray', marker='X', s=50, label='Predicted Intercept Point')
+                    ax.plot([pip[0], pip[0]], [pip[1], pip[1]], [pip[2], 0], c='gray', linestyle=':')
+
+
     def render(self, time: float):
         self._compute_limits()
 
-        if self.data is None:
+        if len(self.episodes) < 1:
             raise ValueError("No episode data set. Please set the episode data before rendering.")
         
         self._render_single_image(time)
@@ -128,7 +181,7 @@ class MatplotVisualizer(AbstractVisualizer):
         self.reset()
 
     def _render_gif(self, filename: str, time: float, interval: float = 0.1, fps: int = 10):
-        if self.data is None:
+        if len(self.episodes) < 1:
             raise ValueError("No episode data set. Please set the episode data before creating a GIF.")
 
         fig = plt.figure(figsize=(12, 8))
@@ -153,7 +206,7 @@ class MatplotVisualizer(AbstractVisualizer):
         plt.close(fig)
 
     def _render_single_image(self, time: float):
-        if self.data is None:
+        if len(self.episodes) < 1:
             raise ValueError("No episode data set. Please set the episode data before creating an image.")
 
         clear_output(wait=True)

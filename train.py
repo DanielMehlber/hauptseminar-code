@@ -1,4 +1,4 @@
-from gym.environment import MissileEnv, MissileEnvSettings
+from environment.environment import MissileEnv, MissileEnvSettings
 import numpy as np
 from models.missile import PhysicalMissleModel
 from stable_baselines3 import SAC

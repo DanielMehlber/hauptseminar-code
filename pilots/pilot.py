@@ -8,11 +8,12 @@ class Pilot(abc.ABC):
     simulation environment. It issues acceleration commands which are then executed
     by the missile's physical model. This is a strict separation of physics and behavior.
     """
-    def __init__(self, name: str):
+    def __init__(self, name: str, uncertainty: float = 0.0):
         self.name = name
+        self.uncertainty = uncertainty
 
     @abc.abstractmethod
-    def step(self, dt: float, t: float) -> np.ndarray:
+    def step(self, dt: float, t: float, uncertainty=0.0) -> np.ndarray:
         """
         Perform a step in the agent's logic.
         This method should be overridden by subclasses to implement specific behavior.

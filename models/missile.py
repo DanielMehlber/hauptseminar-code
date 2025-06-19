@@ -31,11 +31,19 @@ class PhysicalMissleModel:
 
         self.reset()
 
-    def reset(self):
+    def reset(self, uncertainty: float = 0.0):
         self.world_pos = self.world_init_pos.copy()
         self.steps = 0  
 
-        self._init_orientation_matrix(self.world_init_velocity)
+        # displace the missile's start position based on uncertainty
+        uncertainty_pos_dispacement = np.random.normal(0, uncertainty * 1000, 3)
+        self.world_pos += uncertainty_pos_dispacement
+
+        # rotate the missile's start velocity vector based on uncertainty
+        uncertainty_angle_displacement = np.random.normal(0, uncertainty * math.pi/4, 3)
+        velocity = physics.euler_to_rotation_matrix(uncertainty_angle_displacement) @ self.world_init_velocity
+        
+        self._init_orientation_matrix(velocity)
 
     def _build_orthonormal_body_frame(self, velocity_vec):
         """

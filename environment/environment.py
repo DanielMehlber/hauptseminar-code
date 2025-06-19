@@ -20,14 +20,15 @@ class MissileEnvSettings:
 
 class MissileEnv(gym.Env):
     """
-    A custom environment for simulating missile interception scenarios. 
-    It employs a target and an interceptor missile model, allowing for reinforcement learning
-    training and evaluation.
+    A custom environment for simulating missile interception scenarios. The environment variance 
+    is controlled by the uncertainty setting, which influences the noise and uncertainty in the simulation
+    environment.
     """
 
     def __init__(self, target: PhysicalMissleModel, 
                  interceptor: PhysicalMissleModel, 
-                 target_pilot: Pilot = None, 
+                 target_pilot: Pilot = None,
+                 uncertainty: float = 0.0, 
                  settings=MissileEnvSettings()):
         
         super().__init__()
@@ -38,6 +39,10 @@ class MissileEnv(gym.Env):
         self.target = target
         self.interceptor = interceptor
         self.target_pilot = target_pilot
+
+        # apply uncertainty to interceptor and target
+        self.interceptor.reset(uncertainty)
+        self.target.reset(uncertainty)
 
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(15,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -51,12 +56,13 @@ class MissileEnv(gym.Env):
 
         self.current_episode: ep.Episode = None # current episode object
 
-        self.reset()
+        # controls the uncertainty during the simulation
+        self.uncertainty = uncertainty
 
     def reset(self, seed=None):
         super().reset(seed=seed)
-        self.interceptor.reset()
-        self.target.reset()
+        self.interceptor.reset(self.uncertainty)
+        self.target.reset(self.uncertainty)
 
         if self.target_pilot is not None:
             self.target_pilot.reset()
@@ -161,7 +167,7 @@ class MissileEnv(gym.Env):
         # get target action from pilot (if available)
         target_action = np.zeros(2, dtype=np.float32)
         if self.target_pilot is not None:
-            target_action = self.target_pilot.step(dt, self.sim_time)
+            target_action = self.target_pilot.step(dt, self.sim_time, self.uncertainty)
 
         # Update entities with scaled delta time
         self.target.accelerate(target_action, dt=dt, t=self.sim_time)
@@ -176,11 +182,11 @@ class MissileEnv(gym.Env):
         if norm_observations:
             obs = self._get_norm_observations(dt)
         else:
-            obs = self.get_interceptor_observations(dt)
+            obs = self.get_interceptor_observations(dt, self.uncertainty)
 
         status = self._check_status()
         done = self._check_done(status)
-        reward, info = self._get_reward(self.get_interceptor_observations(dt), action, status, dt)
+        reward, info = self._get_reward(self.get_interceptor_observations(dt, self.uncertainty), action, status, dt)
         
         # Update after reward calculation because it needs the last sensor data
         self._update_episode_data()
@@ -190,14 +196,18 @@ class MissileEnv(gym.Env):
     def render(self):
         pass
 
-    def get_interceptor_observations(self, dt) -> InterceptorObservations:
+    def get_interceptor_observations(self, dt, uncertainty=0.0) -> InterceptorObservations:
         """
         Returns the unnormalized observations for the interceptor. This includes data from
         multiple sensors, like seekers and gyroscopes.
         """
+        # calculate noise to be applied given the uncertainty level
+        max_deviation_in_meters = 10 # maximum radar deviation in meters from the actual position
+        noise = np.random.normal(0, uncertainty * max_deviation_in_meters, size=(3,))
 
         # line-of-sight from interceptor to target (from seeker's point of view) - length is distance to target
         missile_space_los_vec = self.interceptor.body_to_world_rot_mat.T @ (self.target.world_pos - self.interceptor.world_pos) # target position in missile space
+        missile_space_los_vec += noise # add noise to the line-of-sight vector
 
         # distance and closing rate to the target (from seekers point of view)
         missile_space_distance_before_vec = np.abs(self.missile_space_last_los_vec) # we care about component-wise distance to target
@@ -251,7 +261,7 @@ class MissileEnv(gym.Env):
         Returns the normalized observations for the interceptor. This includes data from
         multiple sensors, like seekers and gyroscopes.
         """
-        observations = self.get_interceptor_observations(dt)
+        observations = self.get_interceptor_observations(dt, self.uncertainty)
 
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec) # to clamp vector values relative to the initial distance
 

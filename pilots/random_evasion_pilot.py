@@ -27,8 +27,8 @@ class RandomEvasionPilot(Pilot):
 
         self.deviation += new_command * trajectory_maintainance * dt
 
-        # Clip the command to ensure it stays within [0, 1]
-        new_command = np.clip(new_command, 0, 1)
+        # Clip the command to ensure it stays within [-1, 1]
+        new_command = np.clip(new_command, -1, 1)
 
         # Update the last command for smoothness
         self._last_command = new_command

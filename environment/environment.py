@@ -62,6 +62,7 @@ class MissileEnv(gym.Env):
     def reset(self, seed=None):
         super().reset(seed=seed)
         self.interceptor.reset(self.uncertainty)
+        self.interceptor.world_pos[2] = 100.0 # ensure interceptor is above ground
         self.target.reset(self.uncertainty)
 
         if self.target_pilot is not None:

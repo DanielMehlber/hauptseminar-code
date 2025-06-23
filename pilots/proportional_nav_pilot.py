@@ -296,7 +296,7 @@ class ZemProportionalNavPilot:
             np.ndarray: The acceleration command for the interceptor.
         """
         # missile_space_lateral_acc_vector = self._command_from_ground_station(self.n, interceptor, target, dt)
-        missile_space_lateral_acc_vector = self._calc_command_onboard(self.n, InterceptorObservations(observations), dt, interceptor)
+        missile_space_lateral_acc_vector = self._calc_command_on_ground_station(self.n, interceptor, target, dt)
 
         # clamp command to physical limits
         missile_space_norm_lateral_acc_command = self._normalize_command(missile_space_lateral_acc_vector)

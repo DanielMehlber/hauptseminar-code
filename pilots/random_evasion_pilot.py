@@ -43,8 +43,8 @@ class RandomEvasionPilot(Pilot):
     def _determine_parameters(self, uncertainty):
         min_aggression = 0.01
         max_aggression = 0.5
-        min_trajectory_maintainance = 0.001
-        max_trajectory_maintainance = 0.1
+        min_trajectory_maintainance = 0.4
+        max_trajectory_maintainance = 0.01
         
         # interpolate parameters based on uncertainty
         aggression = min_aggression + (max_aggression - min_aggression) * uncertainty

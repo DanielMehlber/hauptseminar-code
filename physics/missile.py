@@ -1,5 +1,5 @@
 import numpy as np
-import models.physics as physics
+import physics.math as physics
 import math
 
 class PhysicalMissleModel:

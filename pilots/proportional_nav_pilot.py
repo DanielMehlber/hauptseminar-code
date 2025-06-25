@@ -1,7 +1,7 @@
 import numpy as np
 from environment.observations import InterceptorObservations 
-from models.missile import PhysicalMissleModel
-import models.physics as physics
+from physics.missile import PhysicalMissleModel
+import physics.math as math
 
 class PlanarProportionalNavPilot:
     def __init__(self, max_acc: float, n: float):
@@ -35,19 +35,19 @@ class PlanarProportionalNavPilot:
         missile_space_plane_normal /= np.linalg.norm(missile_space_plane_normal)
 
         # project the closing rate onto the plane
-        closing_rate_vec_on_plane = physics.project_on_plane(observations.closing_rate_vec, missile_space_plane_normal)
+        closing_rate_vec_on_plane = math.project_on_plane(observations.closing_rate_vec, missile_space_plane_normal)
 
         # given the pitch and yaw angles (for 3D space), we need to get the single angle
         # between previous and current LOS vector on the plane. We therefore reconstruct the
         # previous LOS vector by rotating the current LOS vector about the angular rate
         yaw_angle, pitch_angle = observations.los_angle_rates_vec * dt
-        yaw_rot_matrix = physics.rotate_z_matrix(-yaw_angle)
-        pitch_rot_matrix = physics.rotate_y_matrix(-pitch_angle)
+        yaw_rot_matrix = math.rotate_z_matrix(-yaw_angle)
+        pitch_rot_matrix = math.rotate_y_matrix(-pitch_angle)
 
         previous_los_vector = yaw_rot_matrix @ pitch_rot_matrix  @ missile_space_los_vector
 
         # project the previous LOS vector to the plane
-        previous_los_vector_on_plane = physics.project_on_plane(previous_los_vector, missile_space_plane_normal)
+        previous_los_vector_on_plane = math.project_on_plane(previous_los_vector, missile_space_plane_normal)
         previous_los_vector_on_plane /= np.linalg.norm(previous_los_vector_on_plane)
 
         # angle between the two LOS vectors on the plane
@@ -73,7 +73,7 @@ class PlanarProportionalNavPilot:
         los_acc_command_vec = los_acc_command_magnitude * missile_space_los_perpendicular_vec
 
         # project the acceleration command onto the lateral plane of the interceptor (perpendicular to the velocity vector)
-        lateral_acc_command_vec = physics.project_on_plane(los_acc_command_vec, missile_space_velocity_vec)
+        lateral_acc_command_vec = math.project_on_plane(los_acc_command_vec, missile_space_velocity_vec)
 
         # normalize the acceleration command to the max acceleration
         acc_command_maginude = np.linalg.norm(lateral_acc_command_vec)
@@ -215,7 +215,7 @@ class ZemProportionalNavPilot:
             # build a rotation matrix that undoes the missile's last turn
             missile_space_turn_angles = observations.missile_space_turn_rate * dt
             missile_space_yaw_angle, missile_space_pitch_angle = missile_space_turn_angles[0], missile_space_turn_angles[1]
-            undo_turn_rot_matrix = physics.rotate_z_matrix(-missile_space_yaw_angle) @ physics.rotate_y_matrix(-missile_space_pitch_angle)
+            undo_turn_rot_matrix = math.rotate_z_matrix(-missile_space_yaw_angle) @ math.rotate_y_matrix(-missile_space_pitch_angle)
 
             # cancel own rotation from the target's last position vector
             missile_space_last_target_adjusted_pos_vec = undo_turn_rot_matrix @ self.missile_space_last_target_position
@@ -253,7 +253,7 @@ class ZemProportionalNavPilot:
 
         # move into missile space and project onto its lateral plane
         missile_space_acc_command_vec = interceptor.body_to_world_rot_mat.T @ world_space_acc_command_vec
-        missile_space_lat_acc_command = physics.project_on_plane(missile_space_acc_command_vec, np.array([1.0, 0.0, 0.0]))
+        missile_space_lat_acc_command = math.project_on_plane(missile_space_acc_command_vec, np.array([1.0, 0.0, 0.0]))
 
         # drop the longitudinal component (x): we can only accelerate in the lateral plane
         missile_space_lat_acc_command = np.array([missile_space_lat_acc_command[1], missile_space_lat_acc_command[2]])
@@ -277,7 +277,7 @@ class ZemProportionalNavPilot:
         missile_space_acc_command_vec = zem_proportional_guidance(n, observations.los_distance_vec, closing_rate, missile_space_rel_target_vel_vec)
 
         # project onto the lateral plane of the interceptor
-        missile_space_lat_acc_command = physics.project_on_plane(missile_space_acc_command_vec, np.array([1.0, 0.0, 0.0]))
+        missile_space_lat_acc_command = math.project_on_plane(missile_space_acc_command_vec, np.array([1.0, 0.0, 0.0]))
 
         # drop the longitudinal component (x): we can only accelerate in the lateral plane
         missile_space_lat_acc_command = np.array([missile_space_lat_acc_command[1], missile_space_lat_acc_command[2]])

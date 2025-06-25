@@ -5,7 +5,7 @@ import numpy as np
 import time
 import data.episode as ep
 import time
-from models.missile import PhysicalMissleModel
+from physics.missile import PhysicalMissleModel
 from pilots.pilot import Pilot
 from environment.observations import InterceptorObservations
 import math
@@ -43,6 +43,7 @@ class MissileEnv(gym.Env):
         # apply uncertainty to interceptor and target
         self.interceptor.reset(uncertainty)
         self.target.reset(uncertainty)
+        self.interceptor_state = "midcourse"
 
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(15,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -59,11 +60,14 @@ class MissileEnv(gym.Env):
         # controls the uncertainty during the simulation
         self.uncertainty = uncertainty
 
+        self.current_agent_name = "Agent"
+
     def reset(self, seed=None):
         super().reset(seed=seed)
         self.interceptor.reset(self.uncertainty)
         self.interceptor.world_pos[2] = 100.0 # ensure interceptor is above ground
         self.target.reset(self.uncertainty)
+        self.interceptor_state = "midcourse"
 
         if self.target_pilot is not None:
             self.target_pilot.reset()
@@ -137,7 +141,14 @@ class MissileEnv(gym.Env):
 
         # Add the states to the episode
         self.current_episode.target_states.add(self.sim_time, target_state)
-        self.current_episode.get_interceptor("Agent").states.add(self.sim_time, interceptor_state)
+        self.current_episode.get_interceptor(self.current_agent_name).states.add(self.sim_time, interceptor_state)
+
+    def set_current_agent_name(self, name: str):
+        """
+        Sets the name of the current agent for the episode.
+        This is used for visualization and logging purposes.
+        """
+        self.current_agent_name = name
 
     def step(self, action: np.ndarray, norm_observations=True):
         dt = 0.0
@@ -407,8 +418,14 @@ class MissileEnv(gym.Env):
         # travels over a short durtation of time (e.g. 2 seconds).
         terminal_distance = self.interceptor.max_speed * 3 # distance = speed * time (1s)
         if np.linalg.norm(obs.los_distance_vec) > terminal_distance:
+            if self.interceptor_state != "midcourse":
+                print("Interceptor is now in midcourse phase")
+                self.interceptor_state = "midcourse"
             return self._get_midcourse_reward(obs, action, status, dt)
         else:
+            if self.interceptor_state != "terminal":
+                print("Interceptor is now in terminal phase")
+                self.interceptor_state = "terminal"
             return self._get_terminal_phase_reward(obs, action, status, terminal_distance, dt)
 
     def _check_done(self, status):

@@ -45,15 +45,17 @@ class MissileEnv(gym.Env):
         self.target.reset(uncertainty)
         self.interceptor_state = "midcourse"
 
-        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(15,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-10000, high=10000, shape=(21,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
         # required as anchor point to normalize distance measurements
         self.missile_space_start_distance_vec = self.interceptor.body_to_world_rot_mat.T @ (self.target.world_pos - self.interceptor.world_pos)
+        self.world_space_last_interceptor_velocity: np.ndarray = self.interceptor.get_velocity() # required to calculate the interceptor's acceleration
 
         # required to calculate observations (which as basically changes in position and velocity)
         self.missile_space_last_los_vec: np.ndarray = None # required to calculate closing rate
         self.missile_space_last_los_angle: np.ndarray = None # required to calculate line-of-sight angle rate
+        self.world_space_last_interceptor_position: np.ndarray = None # required to calculate interceptor acceleration
 
         self.current_episode: ep.Episode = None # current episode object
 
@@ -78,6 +80,7 @@ class MissileEnv(gym.Env):
         self.last_step_time = time.time()
         self.last_acc_command = np.zeros(2, dtype=np.float32)
         self.last_missile_orientation_matrix = np.eye(3, dtype=np.float32)
+        self.world_space_last_interceptor_velocity = self.interceptor.get_velocity()
 
         # init sensor state for differential measurements
         self._update_sensor_data()
@@ -181,6 +184,9 @@ class MissileEnv(gym.Env):
         if self.target_pilot is not None:
             target_action = self.target_pilot.step(dt, self.sim_time, self.uncertainty)
 
+        # for calculating the interceptor's acceleration in the observations
+        self.world_space_last_interceptor_velocity = self.interceptor.get_velocity()
+
         # Update entities with scaled delta time
         self.target.accelerate(target_action, dt=dt, t=self.sim_time)
         self.interceptor.accelerate(action, dt=dt, t=self.sim_time)
@@ -214,7 +220,7 @@ class MissileEnv(gym.Env):
         multiple sensors, like seekers and gyroscopes.
         """
         # calculate noise to be applied given the uncertainty level
-        max_deviation_in_meters = 10 # maximum radar deviation in meters from the actual position
+        max_deviation_in_meters = 0 # maximum radar deviation in meters from the actual position
         noise = np.random.normal(0, uncertainty * max_deviation_in_meters, size=(3,))
 
         # line-of-sight from interceptor to target (from seeker's point of view) - length is distance to target
@@ -243,15 +249,21 @@ class MissileEnv(gym.Env):
         # interceptor turn rate in missile space (e.g. by gyroscopes)
         missile_space_turn_angles_vec = np.array([missile_space_yaw_angle, missile_space_pitch_angle])
         missile_space_turn_rate_vec = missile_space_turn_angles_vec / dt
+
+        # acceleration measured by the inertial measurement unit (IMU) in missile space
+        world_space_interceptor_acceleration = (self.interceptor.get_velocity() - self.world_space_last_interceptor_velocity) / dt
+        missile_space_interceptor_acceleration_vec = self.interceptor.body_to_world_rot_mat.T @ world_space_interceptor_acceleration
         
         # create the observation object
         observations = InterceptorObservations()
         observations.los_distance_vec = missile_space_distance_vec
+        observations.previous_los_distance_vec = missile_space_distance_before_vec
         observations.closing_rate_vec = missile_space_closing_rate_vec
         observations.los_angles_vec = missile_space_los_angles_vec
         observations.los_angle_rates_vec = missile_space_los_angles_rate_vec
         observations.world_space_interceptor_orientation = world_space_interceptor_orientation_vec
         observations.missile_space_turn_rate = missile_space_turn_rate_vec
+        observations.missile_space_acceleration = missile_space_interceptor_acceleration_vec
 
         # pack all observations into a single vector
         return observations
@@ -279,13 +291,16 @@ class MissileEnv(gym.Env):
 
         # speed when interceptor and target fly towards each others
         max_speed = self.interceptor.max_speed + self.target.max_speed
+        max_acc = self.interceptor.max_lat_acc
 
         # TODO: think of better ways to normalize these values
         observations.los_distance_vec /= start_distance              # relative to initial distance
+        observations.previous_los_distance_vec /= start_distance     # relative to initial distance
         observations.closing_rate_vec /= max_speed                   # relative to max speed
         observations.los_angles_vec /= np.pi                         # converted to interval [-1, 1] 
         observations.los_angle_rates_vec /= np.pi                    # converted to interval [-1, 1]
         observations.missile_space_turn_rate /= np.pi                # converted to interval [-1, 1]
+        observations.missile_space_acceleration /= max_acc           # relative acceleration limit of airframe
 
         return observations
 
@@ -419,12 +434,10 @@ class MissileEnv(gym.Env):
         terminal_distance = self.interceptor.max_speed * 3 # distance = speed * time (1s)
         if np.linalg.norm(obs.los_distance_vec) > terminal_distance:
             if self.interceptor_state != "midcourse":
-                print("Interceptor is now in midcourse phase")
                 self.interceptor_state = "midcourse"
             return self._get_midcourse_reward(obs, action, status, dt)
         else:
             if self.interceptor_state != "terminal":
-                print("Interceptor is now in terminal phase")
                 self.interceptor_state = "terminal"
             return self._get_terminal_phase_reward(obs, action, status, terminal_distance, dt)
 
@@ -435,7 +448,7 @@ class MissileEnv(gym.Env):
         if self.interceptor.world_pos[2] < 0:
             print ("Interceptor crashed into the ground")
             return "crashed"
-        elif np.linalg.norm(self.interceptor.world_pos - self.target.world_pos) < 50:
+        elif np.linalg.norm(self.interceptor.world_pos - self.target.world_pos) < 100.0:
             print ("Interceptor hit the target")
             return "hit"
         elif self.sim_time > self.settings.time_limit:

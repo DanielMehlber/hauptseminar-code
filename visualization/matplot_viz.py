@@ -5,6 +5,7 @@ import data.episode as ep
 from matplotlib.animation import FuncAnimation
 from IPython.display import display, clear_output
 from visualization.abstract_viz import AbstractVisualizer
+import os
 
 
 class MatplotVisualizer(AbstractVisualizer):
@@ -199,6 +200,7 @@ class MatplotVisualizer(AbstractVisualizer):
 
         ani = FuncAnimation(fig, update_plot, frames=len(times), blit=False, interval=0.1)
         gif_file_name = filename if filename.endswith('.gif') else filename + '.gif'
+        os.makedirs(os.path.dirname(gif_file_name), exist_ok=True)
         ani.save(gif_file_name, writer='imagemagick', fps=fps)
         print(f"GIF saved as {gif_file_name}")
 

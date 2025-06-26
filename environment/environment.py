@@ -293,9 +293,10 @@ class MissileEnv(gym.Env):
         max_speed = self.interceptor.max_speed + self.target.max_speed
         max_acc = self.interceptor.max_lat_acc
 
-        # TODO: think of better ways to normalize these values
-        observations.los_distance_vec /= start_distance              # relative to initial distance
-        observations.previous_los_distance_vec /= start_distance     # relative to initial distance
+        # we apply a logarithmic scaling to the distance vector to avoid too small values near the target
+        observations.los_distance_vec = np.log(np.abs(observations.los_distance_vec) + 1.0) / np.log(start_distance + 1)
+        observations.previous_los_distance_vec = np.log(np.abs(observations.previous_los_distance_vec) + 1.0) / np.log(start_distance + 1)
+
         observations.closing_rate_vec /= max_speed                   # relative to max speed
         observations.los_angles_vec /= np.pi                         # converted to interval [-1, 1] 
         observations.los_angle_rates_vec /= np.pi                    # converted to interval [-1, 1]
@@ -307,24 +308,29 @@ class MissileEnv(gym.Env):
     def _get_terminal_phase_reward(self, obs: InterceptorObservations, 
                                    action: np.ndarray, 
                                    status: str, 
-                                   terminal_distance: float, dt):
+                                   relative_terminal_distance: float, dt):
         """
         The terminal phase purely focuses on hitting the target, no matter what. Energy
         efficiency is not a goal anymore.
         """
-        # We want to exponentially reward lower distances
-        distance = np.linalg.norm(obs.los_distance_vec)
-        relative_distance = distance / terminal_distance # relative to terminal distance [0, 1]
-        # distance_reward = math.pow((1.0 - relative_distance) + 1.0, 2) - 1.0 # quadratic reward for distance
-        distance_reward = math.pow(3, (1.0 - relative_distance)) - 1.0 # exponential reward for distance [0, 2]
+
+        # We include the distance reward of the midcourse phase, to avoid a drop when 
+        # switching to terminal phase, which could discourage the agent.
+        start_distance = np.linalg.norm(self.missile_space_start_distance_vec)
+        dist = np.linalg.norm(obs.los_distance_vec)
+        base_dist_reward = (start_distance - dist) / start_distance # relative to initial distance
+
+        # additional reward for decreasing the terminal distance on top
+        relative_terminal_distance = dist / relative_terminal_distance # relative to terminal distance [0, 1]
+        terminal_distance_reward = math.pow(3, (1.0 - relative_terminal_distance)) - 1.0 # exponential reward for distance [0, 2]
+
+        # overlap the two rewards to avoid too low values
+        distance_reward = base_dist_reward + terminal_distance_reward
 
         # We also want to exponentially reward high closing rates
         distance_before = np.linalg.norm(self.missile_space_last_los_vec)
-        closing_rate = (distance_before - distance) / dt
-        relative_closing_rate = closing_rate / self.interceptor.max_speed # relative to max speed
-        fac = 1.0 if relative_closing_rate > 0 else -1.0
-        # closing_reward = (math.pow(1.0 + abs(relative_closing_rate), 2) - 1.0) * fac # quadratic reward for closing rate
-        closing_reward = (math.pow(3, abs(relative_closing_rate)) - 1.0) * fac # exponential reward for closing rate [-2, 2]
+        closing_rate = (distance_before - dist) / dt
+        closing_reward = closing_rate / self.interceptor.max_speed # relative to max speed
         
         # A slight action punishment should be employed to avoid unnecessary maneuvers
         action_punishment = -np.linalg.norm(action) # [0, 1]
@@ -338,9 +344,9 @@ class MissileEnv(gym.Env):
         elif status == "expired":
             event_reward = -0.5
 
-        distance_reward *= 1.0
-        closing_reward *= 1.0
-        action_punishment *= 0.5
+        distance_reward *= 2.0
+        closing_reward *= 0.5
+        action_punishment *= 1.0
         event_reward *= 10.0
 
         info = {}
@@ -366,6 +372,7 @@ class MissileEnv(gym.Env):
         # The less the distance, the higher the reward
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec)
         dist = np.linalg.norm(obs.los_distance_vec)
+
         dist_reward = (start_distance - dist) / start_distance # relative to initial distance
 
         # We want to reward the interceptor for closing in on the target
@@ -390,17 +397,15 @@ class MissileEnv(gym.Env):
 
         # We want the interceptor to avoid the ground (z < 0)
         interceptor_altidude = self.interceptor.world_pos[2]
-        safe_altitude = 1000
-
-        # Exponential penalty for altitude below safe level
-        ground_penalty = -min(interceptor_altidude / safe_altitude, 1.0)**2 if status != "crashed" else -1.0
+        safe_altitude = 1000.0
+        ground_penalty = -(1 - (interceptor_altidude / safe_altitude)) if interceptor_altidude <= safe_altitude else 0.0
 
         # Weighting the rewards
-        dist_reward *= 1.0
-        closing_rate_reward *= 1.0
-        event_reward *= 2.0
-        action_punishment *= 1.0
-        ground_penalty *= 1.0
+        dist_reward *= 2.0
+        closing_rate_reward *= 1.0 # 3.0
+        event_reward *= 1.0
+        action_punishment *= 2.0
+        ground_penalty *= 4.0
 
         info = {}
         info["dist-reward"] = dist_reward

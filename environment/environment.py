@@ -281,11 +281,11 @@ class MissileEnv(gym.Env):
         max_speed = self.interceptor.max_speed + self.target.max_speed
 
         # TODO: think of better ways to normalize these values
-        observations.los_distance_vec /= start_distance                  # relative to initial distance
+        observations.los_distance_vec /= start_distance              # relative to initial distance
         observations.closing_rate_vec /= max_speed                   # relative to max speed
         observations.los_angles_vec /= np.pi                         # converted to interval [-1, 1] 
         observations.los_angle_rates_vec /= np.pi                    # converted to interval [-1, 1]
-        observations.missile_space_turn_rate /= np.pi                      # converted to interval [-1, 1]
+        observations.missile_space_turn_rate /= np.pi                # converted to interval [-1, 1]
 
         return observations
 
@@ -323,10 +323,10 @@ class MissileEnv(gym.Env):
         elif status == "expired":
             event_reward = -0.5
 
-        distance_reward *= 10.0
-        closing_reward *= 10.0
+        distance_reward *= 1.0
+        closing_reward *= 1.0
         action_punishment *= 0.5
-        event_reward *= 5.0
+        event_reward *= 10.0
 
         info = {}
         info["dist-reward"] = distance_reward
@@ -381,11 +381,11 @@ class MissileEnv(gym.Env):
         ground_penalty = -min(interceptor_altidude / safe_altitude, 1.0)**2 if status != "crashed" else -1.0
 
         # Weighting the rewards
-        dist_reward *= 8.0
-        closing_rate_reward *= 10.0
-        event_reward *= 5.0
-        action_punishment *= 5.0
-        ground_penalty *= 4.0
+        dist_reward *= 1.0
+        closing_rate_reward *= 1.0
+        event_reward *= 2.0
+        action_punishment *= 1.0
+        ground_penalty *= 1.0
 
         info = {}
         info["dist-reward"] = dist_reward

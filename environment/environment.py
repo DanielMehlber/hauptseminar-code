@@ -16,6 +16,7 @@ class MissileEnvSettings:
     min_dt: float = 0.01            # Minimum delta time for simulation steps
     realtime: bool = False          # If True, the simulation will run in real-time
     time_limit: float = 60.0        # Time limit for the simulation in seconds
+    hit_distance: float = 100       # Distance at which the interceptor is considered to have hit the target
 
 
 class MissileEnv(gym.Env):
@@ -318,19 +319,22 @@ class MissileEnv(gym.Env):
         # switching to terminal phase, which could discourage the agent.
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec)
         dist = np.linalg.norm(obs.los_distance_vec)
-        base_dist_reward = (start_distance - dist) / start_distance # relative to initial distance
+        base_dist_penalty = -dist / start_distance # relative to initial distance
 
         # additional reward for decreasing the terminal distance on top
         relative_terminal_distance = dist / relative_terminal_distance # relative to terminal distance [0, 1]
         terminal_distance_reward = math.pow(3, (1.0 - relative_terminal_distance)) - 1.0 # exponential reward for distance [0, 2]
 
         # overlap the two rewards to avoid too low values
-        distance_reward = base_dist_reward + terminal_distance_reward
+        distance_reward = base_dist_penalty + terminal_distance_reward
 
         # We also want to exponentially reward high closing rates
         distance_before = np.linalg.norm(self.missile_space_last_los_vec)
         closing_rate = (distance_before - dist) / dt
         closing_reward = closing_rate / self.interceptor.max_speed # relative to max speed
+
+        # add an additional non-linear quadratic reward for high closing rates
+        closing_reward += math.pow(3, closing_reward) - 1
         
         # A slight action punishment should be employed to avoid unnecessary maneuvers
         action_punishment = -np.linalg.norm(action) # [0, 1]
@@ -342,10 +346,10 @@ class MissileEnv(gym.Env):
         elif status == "crashed":
             event_reward = -1
         elif status == "expired":
-            event_reward = -0.5
+            event_reward = -1
 
-        distance_reward *= 2.0
-        closing_reward *= 0.5
+        distance_reward *= 0.5
+        closing_reward *= 1.0 # because it is non-linear
         action_punishment *= 1.0
         event_reward *= 10.0
 
@@ -373,7 +377,7 @@ class MissileEnv(gym.Env):
         start_distance = np.linalg.norm(self.missile_space_start_distance_vec)
         dist = np.linalg.norm(obs.los_distance_vec)
 
-        dist_reward = (start_distance - dist) / start_distance # relative to initial distance
+        dist_penalty = -dist / start_distance # relative to initial distance
 
         # We want to reward the interceptor for closing in on the target
         previous_distance = np.linalg.norm(self.missile_space_last_los_vec)
@@ -388,12 +392,12 @@ class MissileEnv(gym.Env):
         elif status == "crashed":
             event_reward = -1
         elif status == "expired":
-            event_reward = -0.5
+            event_reward = -1
             
         
         # We want to keep the interceptor energy efficient (less commands = better)
         # small acceleration commands are better than large ones
-        action_punishment = -(np.linalg.norm(action) ** 2)
+        action_punishment = -np.linalg.norm(action)
 
         # We want the interceptor to avoid the ground (z < 0)
         interceptor_altidude = self.interceptor.world_pos[2]
@@ -401,21 +405,21 @@ class MissileEnv(gym.Env):
         ground_penalty = -(1 - (interceptor_altidude / safe_altitude)) if interceptor_altidude <= safe_altitude else 0.0
 
         # Weighting the rewards
-        dist_reward *= 2.0
+        dist_penalty *= 0.5
         closing_rate_reward *= 1.0 # 3.0
-        event_reward *= 1.0
+        event_reward *= 4.0
         action_punishment *= 2.0
         ground_penalty *= 4.0
 
         info = {}
-        info["dist-reward"] = dist_reward
+        info["dist-reward"] = dist_penalty
         info["closing-rate-reward"] = closing_rate_reward
         info["event-reward"] = event_reward
         info["action-punishment"] = action_punishment
         info["ground-penality"] = ground_penalty
 
         # Combine all rewards
-        reward = dist_reward + closing_rate_reward + event_reward + action_punishment + ground_penalty
+        reward = dist_penalty + closing_rate_reward + event_reward + action_punishment + ground_penalty
         info["reward"] = reward
 
         return reward, info
@@ -453,7 +457,7 @@ class MissileEnv(gym.Env):
         if self.interceptor.world_pos[2] < 0:
             print ("Interceptor crashed into the ground")
             return "crashed"
-        elif np.linalg.norm(self.interceptor.world_pos - self.target.world_pos) < 100.0:
+        elif np.linalg.norm(self.interceptor.world_pos - self.target.world_pos) < self.settings.hit_distance:
             print ("Interceptor hit the target")
             return "hit"
         elif self.sim_time > self.settings.time_limit:

@@ -52,3 +52,34 @@ class InterceptorObservations:
         self.world_space_interceptor_orientation = packed_observations[13:16]
         self.missile_space_turn_rate = packed_observations[16:19]
         self.missile_space_acceleration = packed_observations[19:22]
+
+
+@dataclass
+class GroundBaseObservations:
+    """
+    Observation space for a ground base in the simulation environment. The ground base tracks
+    the interceptor and the target using radar and can issue commands to the interceptor.
+    """
+    # ground base observations
+    world_space_interceptor_pos: np.ndarray                # position of the interceptor in world space (x, y, z)
+    world_space_target_pos: np.ndarray                    # position of the target in world space (x, y, z)
+    
+    def __init__(self, space: np.ndarray = None):
+        if space is not None:
+            self.unpack(space)
+
+    def pack(self) -> np.ndarray:
+        """
+        Pack the observations into a single numpy array.
+        
+        Returns:
+            np.ndarray: The packed observations.
+        """
+        return np.concatenate([self.world_space_interceptor_pos, self.world_space_target_pos])
+    
+    def unpack(self, packed_observations: np.ndarray) -> None:
+        """
+        Unpack the packed observations into the individual components.
+        """
+        self.world_space_interceptor_pos = packed_observations[0:3]
+        self.world_space_target_pos = packed_observations[3:6]

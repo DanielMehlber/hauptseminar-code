@@ -29,18 +29,31 @@ class PhysicalMissleModel:
         # represents orientation of missile in 3D space
         self.body_to_world_rot_mat: np.ndarray = None
 
+        # uncertainty factor for noise in the simulation
+        self.uncertainty = 0.0
+
         self.reset()
 
-    def reset(self, uncertainty: float = 0.0):
+    def set_uncertainty(self, uncertainty: float):
+        """
+        Sets the uncertainty for the missile model, which influences the noise in the simulation.
+        This is used to displace the missile's start position and rotate its velocity vector.
+
+        Args:
+            uncertainty (float): The uncertainty factor to apply to the missile's position and velocity.
+        """
+        self.uncertainty = uncertainty
+
+    def reset(self):
         self.world_pos = self.world_init_pos.copy()
         self.steps = 0  
 
         # displace the missile's start position based on uncertainty
-        uncertainty_pos_dispacement = np.random.normal(0, uncertainty * 1000, 3)
+        uncertainty_pos_dispacement = np.random.normal(0, self.uncertainty * 1000, 3)
         self.world_pos += uncertainty_pos_dispacement
 
         # rotate the missile's start velocity vector based on uncertainty
-        uncertainty_angle_displacement = np.random.normal(0, uncertainty * math.pi/4, 3)
+        uncertainty_angle_displacement = np.random.normal(0, self.uncertainty * math.pi/4, 3)
         velocity = physics.euler_to_rotation_matrix(uncertainty_angle_displacement) @ self.world_init_velocity
         
         self._init_orientation_matrix(velocity)

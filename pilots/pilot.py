@@ -29,3 +29,11 @@ class Pilot(abc.ABC):
         """
 
         raise NotImplementedError("Subclasses must implement this method.")
+    
+    def set_uncertainty(self, uncertainty: float):
+        """
+        Set the uncertainty level for the pilot.
+        
+        :param uncertainty: The uncertainty level to set.
+        """
+        self.uncertainty = uncertainty

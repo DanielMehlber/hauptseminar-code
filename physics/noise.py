@@ -18,5 +18,4 @@ class LinearDistanceNoise:
         :return: The noisy point as a numpy array.
         """
         noise = np.random.normal(0, distance * self.spread_per_meter * intensity, size=point.shape)
-        print(f"Applying noise of {np.linalg.norm(noise)} meters at distance {distance}")
         return point + noise

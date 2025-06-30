@@ -127,6 +127,10 @@ class PhysicalMissleModel:
         Returns:
             tuple: The yaw and pitch angles in radians.
         """
+
+        if np.linalg.norm(missile_space_vector) < 1e-6:
+            return 0.0, 0.0
+
         missile_space_roll_axis = np.array([1.0, 0.0, 0.0]) # x is forward (roll axis)
         missile_space_vector /= np.linalg.norm(missile_space_vector) # normalize the vector
 

@@ -1,10 +1,10 @@
-from physics.missile import PhysicalMissleModel
+from physics.missile import PhysicalMissileModel
 from pilots.pilot import Pilot
 from physics import math as pmath
 import numpy as np
 
 class RandomEvasionPilot(Pilot):
-    def __init__(self, missile: PhysicalMissleModel = None, safe_height: float = 1000.0):
+    def __init__(self, missile: PhysicalMissileModel = None, safe_height: float = 1000.0):
         """
         This pilot generates random course diversions for the target, while still trying to 
         maintain a smooth trajectory and its original course.

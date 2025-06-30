@@ -13,7 +13,7 @@ class Pilot(abc.ABC):
         self.uncertainty = uncertainty
 
     @abc.abstractmethod
-    def step(self, dt: float, t: float, uncertainty=0.0) -> np.ndarray:
+    def step(self, dt: float, t: float) -> np.ndarray:
         """
         Perform a step in the agent's logic.
         This method should be overridden by subclasses to implement specific behavior.

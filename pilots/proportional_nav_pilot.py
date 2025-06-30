@@ -1,6 +1,6 @@
 import numpy as np
 from environment.observations import GroundBaseObservations, InterceptorObservations 
-from physics.missile import PhysicalMissleModel
+from physics.missile import PhysicalMissileModel
 import physics.math as math
 from physics.noise import LinearDistanceNoise
 from pilots.pilot import Pilot
@@ -70,12 +70,14 @@ class ZemProportionalNavPilot(Pilot):
         self.world_space_last_interceptor_orientation = None
 
     def reset(self):
-        super().reset()
-        
         self.world_space_last_target_pos = None
         self.world_space_last_interceptor_pos = None
         self.missile_space_last_target_position = None
         self.world_space_last_interceptor_orientation = None
+
+        # CHEATING ahead
+        self._world_space_last_target_pos = None
+        self._world_space_last_interceptor_pos = None
 
     def measure_relative_target_velocity_from_ground(self, observations: GroundBaseObservations, dt: float) -> np.ndarray:
         """
@@ -112,7 +114,7 @@ class ZemProportionalNavPilot(Pilot):
         self.world_space_last_interceptor_pos = observations.world_space_interceptor_pos.copy()
         return world_space_relative_target_velocity_vec
 
-    def measure_relative_target_velocity_from_seeker(self, obs: InterceptorObservations, interceptor: PhysicalMissleModel, own_speed: float, dt: float) -> np.ndarray:
+    def measure_relative_target_velocity_from_seeker(self, obs: InterceptorObservations, interceptor: PhysicalMissileModel, own_speed: float, dt: float) -> np.ndarray:
         """
         Get the target velocity by looking at seeker data. Seeker data is already in missile space, but it is biased
         by the interceptor's own angular velocity and movement. We need to cancel these effects to get the 
@@ -131,13 +133,14 @@ class ZemProportionalNavPilot(Pilot):
 
         missile_space_relative_target_velocity = np.zeros(3)
         if self.missile_space_last_target_position is not None:
-            # build a rotation matrix that undoes the missile's last turn
+            # build a rotation matrix that models the missile's own rotation
             missile_space_turn_angles = obs.current_frame.imu.missile_space_turn_rate * dt
             missile_space_yaw_angle, missile_space_pitch_angle = missile_space_turn_angles[0], missile_space_turn_angles[1]
-            undo_turn_rot_matrix = math.rotate_z_matrix(missile_space_yaw_angle) @ math.rotate_y_matrix(missile_space_pitch_angle)
+            turn_rot_mat = math.rotate_z_matrix(missile_space_yaw_angle) @ math.rotate_y_matrix(missile_space_pitch_angle)
 
             # cancel own rotation from the target's last position vector
-            missile_space_last_los_vector_adjusted = undo_turn_rot_matrix.T @ self.missile_space_last_target_position
+            missile_space_last_los_vector_adjusted = turn_rot_mat.T @ self.missile_space_last_target_position
+            missile_space_last_los_vector_adjusted = self.missile_space_last_target_position
 
             missile_space_relative_target_velocity = (missile_space_current_target_pos - missile_space_last_los_vector_adjusted) / dt
 
@@ -152,7 +155,7 @@ class ZemProportionalNavPilot(Pilot):
 
         return norm_lateral_acc_command
 
-    def _calc_command_on_ground_station(self, n: float, observations: GroundBaseObservations, interceptor: PhysicalMissleModel, dt: float) -> np.ndarray:
+    def _calc_command_on_ground_station(self, n: float, observations: GroundBaseObservations, interceptor: PhysicalMissileModel, dt: float) -> np.ndarray:
         """
         Command is calculated by a ground station that can track and observe absolute positions and velocities of 
         both the interceptor and the target. This makes the task of calculating relative velocities much easier, but
@@ -176,15 +179,24 @@ class ZemProportionalNavPilot(Pilot):
 
         return missile_space_lat_acc_command
 
-    def _calc_command_onboard(self, n: float, observations: InterceptorObservations, dt: float, interceptor: PhysicalMissleModel) -> np.ndarray:
+    def _calc_command_onboard(self, n: float, observations: InterceptorObservations, dt: float, 
+                              interceptor: PhysicalMissileModel, target: PhysicalMissileModel) -> np.ndarray:
         """
         Command is calculated onboard the interceptor using seeker data directly. This avoid the transmission delay of
         commands from a ground station, but requires the interceptor to use biased observations, like relative positions
         which are affected by the interceptor's own angular velocity.
         """
         # get the relative target velocity vector from the seeker data
-        own_speed = np.linalg.norm(interceptor.get_velocity())
-        missile_space_rel_target_vel_vec = self.measure_relative_target_velocity_from_seeker(observations, interceptor, own_speed, dt)
+        own_speed = np.linalg.norm(interceptor.get_world_space_velocity())
+        # missile_space_rel_target_vel_vec = self.measure_relative_target_velocity_from_seeker(observations, interceptor, own_speed, dt)
+
+        # TODO: START CHEAT, but I fail to cancel out the interceptor's own rotation
+        world_space_target_vel = target.get_world_space_velocity()
+        world_space_target_vel = LinearDistanceNoise().apply(world_space_target_vel, observations.current_frame.seeker.distance_to_target, self.uncertainty)
+        world_space_interceptor_vel = interceptor.get_world_space_velocity()
+        world_space_rel_target_vel_vec = world_space_target_vel - world_space_interceptor_vel
+        missile_space_rel_target_vel_vec = interceptor.body_to_world_rot_mat.T @ world_space_rel_target_vel_vec
+        # END CHEAT
 
         # project the relative velocity onto the LOS vector
         closing_rate = -np.dot(observations.current_frame.seeker.los_unit_vec, missile_space_rel_target_vel_vec)
@@ -201,7 +213,7 @@ class ZemProportionalNavPilot(Pilot):
 
         return missile_space_lat_acc_command
 
-    def step(self, observations: np.ndarray, interceptor: PhysicalMissleModel, dt: float, on_board: bool = False) -> np.ndarray:
+    def step(self, observations: np.ndarray, interceptor: PhysicalMissileModel, target: PhysicalMissileModel, dt: float, on_board: bool = False) -> np.ndarray:
         """
         Calculate the acceleration command based on the observations and time step.
         
@@ -218,7 +230,7 @@ class ZemProportionalNavPilot(Pilot):
         if on_board:
             # calculate command onboard the interceptor using seeker 
             interceptor_obs = InterceptorObservations(observations)
-            missile_space_lateral_acc_vector = self._calc_command_onboard(self.n, interceptor_obs, dt, interceptor)
+            missile_space_lateral_acc_vector = self._calc_command_onboard(self.n, interceptor_obs, dt, interceptor, target)
         else:
             ground_base_obs = GroundBaseObservations(observations)
             missile_space_lateral_acc_vector = self._calc_command_on_ground_station(self.n, ground_base_obs, interceptor, dt)

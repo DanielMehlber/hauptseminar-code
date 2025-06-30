@@ -2,7 +2,7 @@ import numpy as np
 import physics.math as physics
 import math
 
-class PhysicalMissleModel:
+class PhysicalMissileModel:
     """
     A missile's model is based on rigid body motion and other physical principles. It is purely physical
     and does not emit and actions or observations. It sole purpose is to keep the missile's physical state
@@ -131,26 +131,15 @@ class PhysicalMissleModel:
         if np.linalg.norm(missile_space_vector) < 1e-6:
             return 0.0, 0.0
 
-        missile_space_roll_axis = np.array([1.0, 0.0, 0.0]) # x is forward (roll axis)
-        missile_space_vector /= np.linalg.norm(missile_space_vector) # normalize the vector
+        missile_space_vector = missile_space_vector / np.linalg.norm(missile_space_vector)
 
-        # project onto 2D horizontal plane to get horizontal angle of change (yaw angle)
-        missile_space_new_velocity_h = np.array([missile_space_vector[0], missile_space_vector[1]])
-        missile_space_new_velocity_h /= np.linalg.norm(missile_space_new_velocity_h)
-        missile_space_roll_axis_h = np.array([missile_space_roll_axis[0], missile_space_roll_axis[1]])
+        # Calculate yaw: angle in horizontal (X-Y) plane
+        yaw_angle = np.arctan2(missile_space_vector[1], missile_space_vector[0])  # atan2(y, x)
 
-        yaw_angle = np.arccos(np.dot(missile_space_new_velocity_h, missile_space_roll_axis_h))
-        yaw_angle *= np.sign(missile_space_vector[1]) # left/right of nose
+        # Calculate pitch: angle in vertical (X-Z) plane
+        pitch_angle = np.arctan2(missile_space_vector[2], missile_space_vector[0])  # atan2(z, x)
 
-        # project onto 2D vertical plane to get vertical angle of change (pitch angle)
-        missile_space_new_velocity_v = np.array([missile_space_vector[0], missile_space_vector[2]])
-        missile_space_new_velocity_v /= np.linalg.norm(missile_space_new_velocity_v)
-        missile_space_roll_axis_v = np.array([missile_space_roll_axis[0], missile_space_roll_axis[2]])
-
-        pitch_angle = np.arccos(np.dot(missile_space_new_velocity_v, missile_space_roll_axis_v))
-        pitch_angle *= np.sign(missile_space_vector[2]) # above/below nose
-
-        return yaw_angle, pitch_angle
+        return yaw_angle, pitch_angle  # in radians
     
     def _apply_acceleration(self, lat_acc: np.ndarray, dt: float):
         """
@@ -207,7 +196,7 @@ class PhysicalMissleModel:
         self.body_to_world_rot_mat = self._build_orientation_matrix(world_new_roll_axis, world_new_yaw_axis, world_new_pitch_axis)
 
         # update world position of missile
-        world_space_new_velocity_vec = self.get_velocity()
+        world_space_new_velocity_vec = self.get_world_space_velocity()
         self.world_pos += world_space_new_velocity_vec * dt
 
         # assert that no components are NaN or Inf
@@ -236,7 +225,7 @@ class PhysicalMissleModel:
         acc_command = lat_acc * self.max_axes_acc # convert percentage to m/s^2
         self._apply_acceleration(acc_command, dt)
     
-    def get_velocity(self) -> np.ndarray:
+    def get_world_space_velocity(self) -> np.ndarray:
         """
         Returns the current velocity of the missile in m/s.
 

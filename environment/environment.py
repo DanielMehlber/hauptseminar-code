@@ -5,7 +5,7 @@ import numpy as np
 import time
 import data.episode as ep
 import time
-from physics.missile import PhysicalMissleModel
+from physics.missile import PhysicalMissileModel
 from physics.noise import LinearDistanceNoise
 from pilots.pilot import Pilot
 from environment.observations import GroundBaseObservations, ImuObservations, InterceptorFrameObservations, InterceptorObservations, SeekerObservations
@@ -28,8 +28,8 @@ class MissileEnv(gym.Env):
     environment.
     """
 
-    def __init__(self, target: PhysicalMissleModel, 
-                 interceptor: PhysicalMissleModel, 
+    def __init__(self, target: PhysicalMissileModel, 
+                 interceptor: PhysicalMissileModel, 
                  target_pilot: Pilot = None,
                  uncertainty: float = 0.0, 
                  settings=MissileEnvSettings()):
@@ -53,7 +53,7 @@ class MissileEnv(gym.Env):
 
         # required as anchor point to normalize distance measurements
         self.missile_space_start_distance_vec = self.interceptor.body_to_world_rot_mat.T @ (self.target.world_pos - self.interceptor.world_pos)
-        self.world_space_last_interceptor_velocity: np.ndarray = self.interceptor.get_velocity() # required to calculate the interceptor's acceleration
+        self.world_space_last_interceptor_velocity: np.ndarray = self.interceptor.get_world_space_velocity() # required to calculate the interceptor's acceleration
 
         # required to calculate observations (which as basically changes in position and velocity)
         self.interceptor_previous_frame_observations: InterceptorFrameObservations = None
@@ -83,7 +83,7 @@ class MissileEnv(gym.Env):
         self.last_step_time = time.time()
         self.last_acc_command = np.zeros(2, dtype=np.float32)
         self.last_missile_orientation_matrix = np.eye(3, dtype=np.float32)
-        self.world_space_last_interceptor_velocity = self.interceptor.get_velocity()
+        self.world_space_last_interceptor_velocity = self.interceptor.get_world_space_velocity()
 
         # reset observations of sensors
         self.interceptor_current_frame_observations = None
@@ -137,7 +137,7 @@ class MissileEnv(gym.Env):
         # Update the episode data with the current state of the interceptor and target
         interceptor_state = ep.InterceptorState(
             position=self.interceptor.world_pos.copy(),
-            velocity=self.interceptor.get_velocity().copy(),
+            velocity=self.interceptor.get_world_space_velocity().copy(),
             command=self.last_acc_command.copy(),
             distance=np.linalg.norm(self.interceptor.world_pos - self.target.world_pos), # distance to target in missile space
             predicted_intercept_point=None # can be set with other means
@@ -145,7 +145,7 @@ class MissileEnv(gym.Env):
 
         target_state = ep.TargetState(
             position=self.target.world_pos.copy(),
-            velocity=self.target.get_velocity().copy()
+            velocity=self.target.get_world_space_velocity().copy()
         )
 
         # Add the states to the episode
@@ -191,7 +191,7 @@ class MissileEnv(gym.Env):
             target_action = self.target_pilot.step(dt, self.sim_time, self._uncertainty)
 
         # for calculating the interceptor's acceleration in the observations
-        self.world_space_last_interceptor_velocity = self.interceptor.get_velocity()
+        self.world_space_last_interceptor_velocity = self.interceptor.get_world_space_velocity()
 
         # Update entities with scaled delta time
         self.target.accelerate(target_action, dt=dt, t=self.sim_time)
@@ -278,7 +278,7 @@ class MissileEnv(gym.Env):
         seeker_obs.los_angle_rates_vec = seeker_los_angles_rates_vec
 
         # IMU observations
-        world_space_interceptor_velocity_vec = self.interceptor.get_velocity()
+        world_space_interceptor_velocity_vec = self.interceptor.get_world_space_velocity()
         imu_world_space_interceptor_orientation = world_space_interceptor_velocity_vec / np.linalg.norm(world_space_interceptor_velocity_vec)
         
         # interceptor turn angles in missile space (e.g. by gyroscopes)
@@ -293,7 +293,7 @@ class MissileEnv(gym.Env):
             imu_missile_space_turn_rate = np.array([missile_space_yaw_angle_rate, missile_space_pitch_angle_rate, 0.0])
 
         # acceleration measured by the inertial measurement unit (IMU) in missile space
-        world_space_interceptor_acceleration = (self.interceptor.get_velocity() - self.world_space_last_interceptor_velocity) / dt
+        world_space_interceptor_acceleration = (self.interceptor.get_world_space_velocity() - self.world_space_last_interceptor_velocity) / dt
         imu_missile_space_acceleration = self.interceptor.body_to_world_rot_mat.T @ world_space_interceptor_acceleration
         
         imu_obs = ImuObservations()
@@ -438,7 +438,7 @@ class MissileEnv(gym.Env):
         # We want to reward the interceptor for closing in on the target
         previous_distance = obs.previous_frame.seeker.distance_to_target
         closing_rate_reward = (previous_distance - current_distance) / dt # positive if closing in on target
-        closing_rate_reward /= np.linalg.norm(self.interceptor.get_velocity()) # relative to max speed
+        closing_rate_reward /= np.linalg.norm(self.interceptor.get_world_space_velocity()) # relative to max speed
 
         # We want to reward/punish the interceptor for certain events
         event_reward = 0.0

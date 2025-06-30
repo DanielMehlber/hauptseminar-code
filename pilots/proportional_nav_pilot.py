@@ -98,14 +98,13 @@ class ZemProportionalNavPilot(Pilot):
             # differentiate the last and current position to get the velocity
             world_space_interceptor_vel_vec = (observations.world_space_interceptor_pos - self.world_space_last_interceptor_pos) / dt
         
-        world_space_relative_target_velocity_vec = np.zeros(3)
+        world_space_target_velocity_vec = np.zeros(3)
         if self.world_space_last_target_pos is not None:
             # differntiate them to get velocity
             world_space_target_velocity_vec = (observations.world_space_target_pos - self.world_space_last_target_pos) / dt
 
-            # make relative to interceptor velocity
-            world_space_relative_target_velocity_vec = world_space_target_velocity_vec - world_space_interceptor_vel_vec
-     
+        # make relative to interceptor velocity
+        world_space_relative_target_velocity_vec = world_space_target_velocity_vec - world_space_interceptor_vel_vec
         assert np.all(np.isfinite(world_space_relative_target_velocity_vec)), "velocity overflow encountered"
 
         # store for the next time step
@@ -113,7 +112,7 @@ class ZemProportionalNavPilot(Pilot):
         self.world_space_last_interceptor_pos = observations.world_space_interceptor_pos.copy()
         return world_space_relative_target_velocity_vec
 
-    def measure_relative_target_velocity_from_seeker(self, observations: InterceptorObservations, interceptor: PhysicalMissleModel, own_speed: float, dt: float) -> np.ndarray:
+    def measure_relative_target_velocity_from_seeker(self, obs: InterceptorObservations, interceptor: PhysicalMissleModel, own_speed: float, dt: float) -> np.ndarray:
         """
         Get the target velocity by looking at seeker data. Seeker data is already in missile space, but it is biased
         by the interceptor's own angular velocity and movement. We need to cancel these effects to get the 
@@ -128,37 +127,21 @@ class ZemProportionalNavPilot(Pilot):
             np.ndarray: The relative target velocity vector in the missile space.
         """
         assert dt > 1e-6, "delta time is too small for stable calculations"
+        missile_space_current_target_pos = obs.current_frame.seeker.los_unit_vec * obs.current_frame.seeker.distance_to_target
 
         missile_space_relative_target_velocity = np.zeros(3)
         if self.missile_space_last_target_position is not None:
             # build a rotation matrix that undoes the missile's last turn
-            missile_space_turn_angles = observations.missile_space_turn_rate * dt
+            missile_space_turn_angles = obs.current_frame.imu.missile_space_turn_rate * dt
             missile_space_yaw_angle, missile_space_pitch_angle = missile_space_turn_angles[0], missile_space_turn_angles[1]
             undo_turn_rot_matrix = math.rotate_z_matrix(missile_space_yaw_angle) @ math.rotate_y_matrix(missile_space_pitch_angle)
 
             # cancel own rotation from the target's last position vector
             missile_space_last_los_vector_adjusted = undo_turn_rot_matrix.T @ self.missile_space_last_target_position
-            # missile_space_last_los_vector_adjusted = self.missile_space_last_target_position
 
-            ### delete me
-            # if self.world_space_last_interceptor_orientation is not None:
-            #    missile_space_last_estimated_orientation = undo_turn_rot_matrix @ np.array([1.0, 0.0, 0.0])
-            #    world_space_last_estimated_orientation = interceptor.body_to_world_rot_mat @ missile_space_last_estimated_orientation
-            #    error = np.linalg.norm(world_space_last_estimated_orientation - self.world_space_last_interceptor_orientation)
-            #    angle = np.arccos(np.dot(world_space_last_estimated_orientation, self.world_space_last_interceptor_orientation))
-                # print(f"Angle between last estimated and current orientation: {np.degrees(angle):.3f} deg")
-                # print(f"missile space last estimated orientation error: {error:.3f}")
+            missile_space_relative_target_velocity = (missile_space_current_target_pos - missile_space_last_los_vector_adjusted) / dt
 
-            # self.world_space_last_interceptor_orientation = observations.world_space_interceptor_orientation.copy()
-            ### delete me
-
-            # cancel own movement from the target's last position vector
-            # missile_space_last_target_adjusted_pos_vec += np.array([-own_speed * dt, 0.0, 0.0]) 
-
-            missile_space_relative_target_velocity = (observations.los_distance_vec - missile_space_last_los_vector_adjusted) / dt
-            print (f"[Seeker] Relative Target velocity: {np.linalg.norm(missile_space_relative_target_velocity):.3f} m/s")
-
-        self.missile_space_last_target_position = observations.los_distance_vec.copy()
+        self.missile_space_last_target_position = missile_space_current_target_pos.copy()
         return missile_space_relative_target_velocity
     
     def _normalize_command(self, lateral_acc_command_vec: np.ndarray) -> np.ndarray:
@@ -204,10 +187,11 @@ class ZemProportionalNavPilot(Pilot):
         missile_space_rel_target_vel_vec = self.measure_relative_target_velocity_from_seeker(observations, interceptor, own_speed, dt)
 
         # project the relative velocity onto the LOS vector
-        closing_rate = -np.dot(observations.los_distance_vec, missile_space_rel_target_vel_vec) / np.linalg.norm(observations.los_distance_vec)
+        closing_rate = -np.dot(observations.current_frame.seeker.los_unit_vec, missile_space_rel_target_vel_vec)
 
         # in the missile coordinate system
-        missile_space_acc_command_vec = zem_proportional_guidance(n, observations.los_distance_vec, closing_rate, missile_space_rel_target_vel_vec)
+        missile_space_los_vec = observations.current_frame.seeker.los_unit_vec * observations.current_frame.seeker.distance_to_target
+        missile_space_acc_command_vec = zem_proportional_guidance(n, missile_space_los_vec, closing_rate, missile_space_rel_target_vel_vec)
 
         # project onto the lateral plane of the interceptor
         missile_space_lat_acc_command = math.project_on_plane(missile_space_acc_command_vec, np.array([1.0, 0.0, 0.0]))
@@ -215,7 +199,6 @@ class ZemProportionalNavPilot(Pilot):
         # drop the longitudinal component (x): we can only accelerate in the lateral plane
         missile_space_lat_acc_command = np.array([missile_space_lat_acc_command[1], missile_space_lat_acc_command[2]])
 
-        # return np.array([0.0, 0.0])
         return missile_space_lat_acc_command
 
     def step(self, observations: np.ndarray, interceptor: PhysicalMissleModel, dt: float, on_board: bool = False) -> np.ndarray:
@@ -238,21 +221,10 @@ class ZemProportionalNavPilot(Pilot):
             missile_space_lateral_acc_vector = self._calc_command_onboard(self.n, interceptor_obs, dt, interceptor)
         else:
             ground_base_obs = GroundBaseObservations(observations)
-            missile_space_lateral_acc_vector = self._calc_command_on_ground_station(self.n,  
-                                                                                    ground_base_obs, interceptor, dt)
+            missile_space_lateral_acc_vector = self._calc_command_on_ground_station(self.n, ground_base_obs, interceptor, dt)
+
         # clamp command to physical limits
         missile_space_norm_lateral_acc_command = self._normalize_command(missile_space_lateral_acc_vector)
 
         # return np.array([0.0, 0.0])
         return missile_space_norm_lateral_acc_command
-    
-
-    def _get_observations(self, observations: np.ndarray) -> tuple:        
-        norm_distance = observations[0:3]
-        norm_closing_rate = observations[3:6]
-        norm_los_angle = observations[6:8]
-        norm_los_angle_rate = observations[8:10]
-        world_space_interceptor_orientation = observations[10:13]
-        missile_space_turn_rate = observations[13:16]
-
-        return norm_distance, norm_closing_rate, norm_los_angle, norm_los_angle_rate, world_space_interceptor_orientation, missile_space_turn_rate

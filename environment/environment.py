@@ -42,9 +42,11 @@ class MissileEnv(gym.Env):
         self.interceptor = interceptor
         self.target_pilot = target_pilot
 
+        self.set_uncertainty(uncertainty)
+
         # apply uncertainty to interceptor and target
-        self.interceptor.reset(uncertainty)
-        self.target.reset(uncertainty)
+        self.interceptor.reset()
+        self.target.reset()
         self.interceptor_state = "midcourse"
 
         self.observation_space = spaces.Box(low=-10000, high=10000, shape=(21,), dtype=np.float32)
@@ -60,9 +62,7 @@ class MissileEnv(gym.Env):
         self.world_space_last_interceptor_position: np.ndarray = None # required to calculate interceptor acceleration
 
         self.current_episode: ep.Episode = None # current episode object
-
-        # controls the uncertainty during the simulation
-        self._uncertainty = uncertainty
+        
 
         self.current_agent_name = "Agent"
 
@@ -193,7 +193,7 @@ class MissileEnv(gym.Env):
         # get target action from pilot (if available)
         target_action = np.zeros(2, dtype=np.float32)
         if self.target_pilot is not None:
-            target_action = self.target_pilot.step(dt, self.sim_time, self._uncertainty)
+            target_action = self.target_pilot.step(dt, self.sim_time)
 
         # for calculating the interceptor's acceleration in the observations
         self.world_space_last_interceptor_velocity = self.interceptor.get_velocity()
